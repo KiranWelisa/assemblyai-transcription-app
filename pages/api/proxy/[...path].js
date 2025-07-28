@@ -1,6 +1,17 @@
 // API Proxy for AssemblyAI to handle CORS and protect API key
 
 export default async function handler(req, res) {
+  // Set CORS headers for all responses
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
   const { path } = req.query;
   const apiPath = Array.isArray(path) ? path.join('/') : path;
   
@@ -8,7 +19,11 @@ export default async function handler(req, res) {
   const ASSEMBLY_BASE_URL = 'https://api.assemblyai.com/v2';
 
   if (!ASSEMBLYAI_API_KEY) {
-    return res.status(500).json({ error: 'AssemblyAI API key not configured' });
+    console.error('AssemblyAI API key not found in environment variables');
+    return res.status(500).json({ 
+      error: 'AssemblyAI API key not configured',
+      message: 'Please set ASSEMBLYAI_API_KEY in Vercel environment variables'
+    });
   }
 
   try {
@@ -47,11 +62,14 @@ export default async function handler(req, res) {
     // Get the response data
     const data = await response.json();
     
-    // Return the response
+    // Return the response with same status code
     res.status(response.status).json(data);
   } catch (error) {
     console.error('Proxy error:', error);
-    res.status(500).json({ error: 'Failed to proxy request to AssemblyAI' });
+    res.status(500).json({ 
+      error: 'Failed to proxy request to AssemblyAI',
+      details: error.message 
+    });
   }
 }
 
