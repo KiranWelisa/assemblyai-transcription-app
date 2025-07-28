@@ -16,6 +16,26 @@ const AssemblyAITranscription = () => {
   // Use the API proxy URL from environment or default
   const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || '/api/proxy';
 
+  // Helper function to detect language from language code
+  const getLanguageDisplay = (languageCode) => {
+    if (!languageCode) return '🌐 Unknown';
+    
+    const code = languageCode.toLowerCase();
+    
+    // Check for Dutch variations (nl, nl_nl, etc.)
+    if (code === 'nl' || code === 'nl_nl' || code.startsWith('nl')) {
+      return '🇳🇱 Dutch';
+    }
+    
+    // Check for English variations (en, en_us, en_gb, etc.)
+    if (code === 'en' || code === 'en_us' || code === 'en_gb' || code === 'en_uk' || code.startsWith('en')) {
+      return '🇬🇧 English';
+    }
+    
+    // Default fallback - show the original code
+    return '🌐 ' + languageCode;
+  };
+
   // File Upload Handler
   const handleFileSelect = (file) => {
     if (file && (file.type.startsWith('audio/') || file.type.startsWith('video/'))) {
@@ -234,7 +254,7 @@ const AssemblyAITranscription = () => {
         <div className="mb-4">
           <h3 className="text-lg font-semibold mb-2">Transcription Result</h3>
           <div className="flex items-center gap-4 text-sm text-gray-600">
-            <span>Language: {transcript.language_code === 'nl' ? 'Dutch' : 'English'}</span>
+            <span>Language: {getLanguageDisplay(transcript.language_code)}</span>
             <span>Duration: {formatTime(transcript.audio_duration)}</span>
             <span>Words: {transcript.words?.length || 0}</span>
           </div>
@@ -309,7 +329,7 @@ const AssemblyAITranscription = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="font-medium text-gray-800">
-                      {transcript.language_code === 'nl' ? '🇳🇱 Dutch' : '🇬🇧 English'} Transcription
+                      {getLanguageDisplay(transcript.language_code)} Transcription
                     </p>
                     <p className="text-sm text-gray-600">
                       {formatDate(transcript.created)}
