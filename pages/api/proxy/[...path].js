@@ -4,10 +4,10 @@ export default async function handler(req, res) {
   const { path } = req.query;
   const apiPath = Array.isArray(path) ? path.join('/') : path;
   
-  const ASSEMBLY_API_KEY = process.env.ASSEMBLYAI_API_KEY;
+  const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY;
   const ASSEMBLY_BASE_URL = 'https://api.assemblyai.com/v2';
 
-  if (!ASSEMBLY_API_KEY) {
+  if (!ASSEMBLYAI_API_KEY) {
     return res.status(500).json({ error: 'AssemblyAI API key not configured' });
   }
 
@@ -17,7 +17,7 @@ export default async function handler(req, res) {
     
     // Prepare headers
     const headers = {
-      'Authorization': ASSEMBLY_API_KEY,
+      'Authorization': ASSEMBLYAI_API_KEY,
     };
 
     // Add content-type for POST requests with JSON body
