@@ -18,22 +18,27 @@ const AssemblyAITranscription = () => {
 
   // Helper function to detect language from language code
   const getLanguageDisplay = (languageCode) => {
-    if (!languageCode) return '🌐 Unknown';
-    
-    const code = languageCode.toLowerCase();
-    
-    // Check for Dutch variations (nl, nl_nl, etc.)
-    if (code === 'nl' || code === 'nl_nl' || code.startsWith('nl')) {
-      return '🇳🇱 Dutch';
+    try {
+      if (!languageCode) return '🌐 Unknown';
+      
+      const code = String(languageCode).toLowerCase();
+      
+      // Check for Dutch variations (nl, nl_nl, etc.)
+      if (code === 'nl' || code === 'nl_nl' || code.startsWith('nl')) {
+        return '🇳🇱 Dutch';
+      }
+      
+      // Check for English variations (en, en_us, en_gb, etc.)
+      if (code === 'en' || code === 'en_us' || code === 'en_gb' || code === 'en_uk' || code.startsWith('en')) {
+        return '🇬🇧 English';
+      }
+      
+      // Default fallback - show the original code
+      return '🌐 ' + languageCode;
+    } catch (err) {
+      console.error('Error in getLanguageDisplay:', err);
+      return '🌐 Unknown';
     }
-    
-    // Check for English variations (en, en_us, en_gb, etc.)
-    if (code === 'en' || code === 'en_us' || code === 'en_gb' || code === 'en_uk' || code.startsWith('en')) {
-      return '🇬🇧 English';
-    }
-    
-    // Default fallback - show the original code
-    return '🌐 ' + languageCode;
   };
 
   // File Upload Handler
@@ -211,10 +216,12 @@ const AssemblyAITranscription = () => {
       const response = await fetch(`${API_BASE_URL}/transcript?limit=20`);
 
       if (!response.ok) {
+        console.error('Failed to fetch transcriptions, status:', response.status);
         throw new Error('Failed to fetch transcriptions');
       }
 
       const data = await response.json();
+      console.log('Fetched transcriptions:', data); // Debug log
       setPastTranscriptions(data.transcripts || []);
     } catch (err) {
       console.error('Error fetching past transcriptions:', err);
@@ -320,39 +327,46 @@ const AssemblyAITranscription = () => {
           {pastTranscriptions.length === 0 ? (
             <p className="text-gray-500 text-center py-4">No past transcriptions found</p>
           ) : (
-            pastTranscriptions.map((transcript) => (
-              <div
-                key={transcript.id}
-                className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 cursor-pointer"
-                onClick={() => loadPastTranscription(transcript.id)}
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium text-gray-800">
-                      {getLanguageDisplay(transcript.language_code)} Transcription
-                    </p>
-                    <p className="text-sm text-gray-600">
-                      {formatDate(transcript.created)}
-                    </p>
+            pastTranscriptions.map((transcript) => {
+              try {
+                return (
+                  <div
+                    key={transcript.id}
+                    className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 cursor-pointer"
+                    onClick={() => loadPastTranscription(transcript.id)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium text-gray-800">
+                          {getLanguageDisplay(transcript.language_code)} Transcription
+                        </p>
+                        <p className="text-sm text-gray-600">
+                          {formatDate(transcript.created)}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm text-gray-600">
+                          Duration: {formatTime(transcript.audio_duration || 0)}
+                        </p>
+                        <p className="text-sm">
+                          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium
+                            ${transcript.status === 'completed' ? 'bg-green-100 text-green-800' : 
+                              transcript.status === 'error' ? 'bg-red-100 text-red-800' : 
+                              'bg-yellow-100 text-yellow-800'}`}>
+                            {transcript.status === 'completed' && <CheckCircle className="w-3 h-3" />}
+                            {transcript.status === 'error' && <AlertCircle className="w-3 h-3" />}
+                            {transcript.status}
+                          </span>
+                        </p>
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-sm text-gray-600">
-                      Duration: {formatTime(transcript.audio_duration)}
-                    </p>
-                    <p className="text-sm">
-                      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium
-                        ${transcript.status === 'completed' ? 'bg-green-100 text-green-800' : 
-                          transcript.status === 'error' ? 'bg-red-100 text-red-800' : 
-                          'bg-yellow-100 text-yellow-800'}`}>
-                        {transcript.status === 'completed' && <CheckCircle className="w-3 h-3" />}
-                        {transcript.status === 'error' && <AlertCircle className="w-3 h-3" />}
-                        {transcript.status}
-                      </span>
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ))
+                );
+              } catch (err) {
+                console.error('Error rendering transcript:', transcript.id, err);
+                return null;
+              }
+            })
           )}
         </div>
       )}
@@ -362,6 +376,11 @@ const AssemblyAITranscription = () => {
   // Load past transcriptions on mount
   useEffect(() => {
     fetchPastTranscriptions();
+  }, []);
+
+  // Also auto-expand past transcriptions on mount to make them visible
+  useEffect(() => {
+    setShowPastTranscriptions(true);
   }, []);
 
   return (
