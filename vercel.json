@@ -1,0 +1,8 @@
+{
+  "env": {
+    "ASSEMBLYAI_API_KEY": "@assemblyai-api-key"
+  },
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "framework": "nextjs"
+}
