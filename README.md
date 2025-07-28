@@ -12,22 +12,38 @@ A modern audio/video transcription application with Dutch language default and s
 - 🎨 Modern, responsive UI
 - 🔒 Secure API proxy implementation
 
-## Quick Deploy to Vercel
+## 🚀 Deploy to Vercel in 2 Minutes
 
-### 1. Deploy with One Click
+### Option 1: One-Click Deploy (Easiest!)
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/KiranWelisa/assemblyai-transcription-app&env=ASSEMBLYAI_API_KEY&envDescription=Your%20AssemblyAI%20API%20key&envLink=https://www.assemblyai.com/dashboard/signup)
 
-### 2. Manual Deploy
+Just click the button above and:
+1. It will clone this repo to your GitHub
+2. Deploy it to Vercel
+3. Ask for your AssemblyAI API key
+4. Done! Your app is live! 🎉
 
-1. Fork or clone this repository
-2. Sign up for [AssemblyAI](https://assemblyai.com) and get your API key
-3. Install Vercel CLI: `npm i -g vercel`
-4. Run `vercel` in the project directory
-5. Add your environment variable when prompted:
-   - `ASSEMBLYAI_API_KEY`: Your AssemblyAI API key
+### Option 2: Deploy from GitHub
 
-## Local Development
+1. **Fork this repository** to your GitHub account
+2. Go to [vercel.com](https://vercel.com)
+3. Click "New Project" and import your forked repo
+4. Add environment variable:
+   - Name: `ASSEMBLYAI_API_KEY`
+   - Value: Your AssemblyAI API key (get one at [assemblyai.com](https://assemblyai.com))
+5. Click "Deploy"
+
+That's it! Your app will be live at `https://your-project.vercel.app`
+
+## 🔑 Get Your AssemblyAI API Key
+
+1. Sign up at [assemblyai.com](https://assemblyai.com)
+2. Go to your dashboard
+3. Copy your API key
+4. Add it to Vercel as shown above
+
+## 💻 Local Development
 
 ```bash
 # Clone the repository
@@ -38,8 +54,8 @@ cd assemblyai-transcription-app
 npm install
 
 # Copy environment variables
-cp .env.example .env
-# Edit .env and add your AssemblyAI API key
+cp .env.example .env.local
+# Edit .env.local and add your AssemblyAI API key
 
 # Run development server
 npm run dev
@@ -47,43 +63,60 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) to see the app.
 
-## Environment Variables
+## 📁 Project Structure
 
-- `ASSEMBLYAI_API_KEY`: Your AssemblyAI API key (required)
-- `NEXT_PUBLIC_API_BASE_URL`: Override the API base URL (optional)
+```
+assemblyai-transcription-app/
+├── pages/
+│   ├── index.js             # Main page
+│   └── api/
+│       └── proxy/
+│           └── [...path].js # API proxy for AssemblyAI
+├── components/
+│   └── AssemblyAITranscription.js # Main React component
+├── styles/
+│   └── globals.css          # Global styles with Tailwind
+├── .env.example             # Example environment variables
+└── package.json             # Dependencies
+```
 
-## How It Works
+## 🛠 How It Works
 
 1. **Frontend**: React-based UI for file upload and transcription display
 2. **API Proxy**: Next.js API routes securely handle AssemblyAI requests
 3. **Security**: API key is kept server-side, never exposed to the client
+4. **Auto-configuration**: Automatically detects Vercel URL for API calls
 
-## API Routes
+## 📚 API Routes
 
 - `POST /api/proxy/upload` - Upload audio/video files
 - `POST /api/proxy/transcript` - Create transcription
 - `GET /api/proxy/transcript/:id` - Get transcript status/results
 - `GET /api/proxy/transcript` - List all transcripts
 
-## Supported File Formats
+## 🎵 Supported File Formats
 
 - **Audio**: MP3, WAV, AAC, FLAC, OGG, M4A, OPUS, AMR, WMA
 - **Video**: MP4, MOV, WebM, MTS, MXF
 - **Max file size**: 2.2GB
 
-## Tech Stack
+## 🔧 Configuration
 
-- Next.js 14
-- React 18
-- Tailwind CSS
-- Lucide Icons
-- AssemblyAI API
+The app automatically configures itself for Vercel deployment. No manual URL configuration needed!
 
-## License
+For advanced users, you can override settings:
+- `ASSEMBLYAI_API_KEY`: Your AssemblyAI API key (required)
+- `NEXT_PUBLIC_API_BASE_URL`: Override the API base URL (optional)
+
+## 📝 License
 
 MIT License - feel free to use this for your own projects!
 
-## Support
+## 🤝 Support
 
 - [AssemblyAI Documentation](https://www.assemblyai.com/docs)
 - [Create an issue](https://github.com/KiranWelisa/assemblyai-transcription-app/issues)
+
+---
+
+Made with ❤️ for easy audio transcription
