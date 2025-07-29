@@ -1,6 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { Upload, Link, Globe, Loader2, User, ChevronDown, ChevronUp, CheckCircle, AlertCircle } from 'lucide-react';
 
+// ✅ NEW: Helper function to reformat Google Drive links
+const reformatGoogleDriveLink = (url) => {
+  const regex = /drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/;
+  const match = url.match(regex);
+
+  // If it's a standard Google Drive link, reformat it
+  if (match && match[1]) {
+    const fileId = match[1];
+    return `https://drive.google.com/uc?export=download&id=${fileId}`;
+  }
+
+  // Otherwise, return the original URL
+  return url;
+};
+
 const AssemblyAITranscription = () => {
   const [audioUrl, setAudioUrl] = useState('');
   const [language, setLanguage] = useState('nl');
@@ -94,8 +109,12 @@ const AssemblyAITranscription = () => {
       setError('Please enter a public URL for an audio or video file.');
       return;
     }
+    
+    // ✅ Use the helper function to get a direct link
+    const directUrl = reformatGoogleDriveLink(audioUrl);
+
     try {
-      const transcript = await createTranscription(audioUrl);
+      const transcript = await createTranscription(directUrl);
       setCurrentTranscriptId(transcript.id);
       await pollTranscriptionStatus(transcript.id);
       fetchPastTranscriptions();
