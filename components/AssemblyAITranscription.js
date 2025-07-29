@@ -114,31 +114,39 @@ const AssemblyAITranscription = () => {
   };
 
   // Create transcription
+  // Update the createTranscription function to ensure language_code is sent properly:
+  
   const createTranscription = async (audioUrl) => {
     setTranscriptionStatus('transcribing');
-
+  
     try {
+      // Prepare the request body with proper language_code
+      const requestBody = {
+        audio_url: audioUrl,
+        language_code: language, // This should be 'nl' or 'en' based on user selection
+        speaker_labels: true,
+        speech_model: 'best',
+        punctuate: true,
+        format_text: true
+      };
+      
+      console.log('Creating transcription with request body:', requestBody);
+  
       const response = await fetch(`${API_BASE_URL}/transcript`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          audio_url: audioUrl,
-          language_code: language,
-          speaker_labels: true,
-          speech_model: 'best',
-          punctuate: true,
-          format_text: true
-        })
+        body: JSON.stringify(requestBody)
       });
-
+  
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to create transcription');
       }
-
+  
       const data = await response.json();
+      console.log('Transcription created with response:', data);
       return data;
     } catch (err) {
       setError(`Failed to create transcription: ${err.message}`);
