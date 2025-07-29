@@ -147,21 +147,23 @@ const AssemblyAITranscription = () => {
     }
   };
 
-  // Poll transcription status
+  // Update the pollTranscriptionStatus function with better error handling:
+  
   const pollTranscriptionStatus = async (transcriptId) => {
     let attempts = 0;
     const maxAttempts = 200; // ~10 minutes with 3 second intervals
-
+  
     while (attempts < maxAttempts) {
       try {
         const response = await fetch(`${API_BASE_URL}/transcript/${transcriptId}`);
-
+  
         if (!response.ok) {
-          throw new Error('Failed to fetch transcript status');
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to fetch transcript status');
         }
-
+  
         const transcript = await response.json();
-
+  
         if (transcript.status === 'completed') {
           setTranscriptionStatus('completed');
           setCurrentTranscript(transcript);
@@ -169,20 +171,21 @@ const AssemblyAITranscription = () => {
         } else if (transcript.status === 'error') {
           throw new Error(transcript.error || 'Transcription failed');
         }
-
+  
         // Update status
         setTranscriptionStatus(transcript.status || 'processing');
-
+  
         // Wait 3 seconds before next poll
         await new Promise(resolve => setTimeout(resolve, 3000));
         attempts++;
       } catch (err) {
-        setError(`Error checking transcription status: ${err.message}`);
+        const message = err.message || 'Error checking transcription status';
+        setError(`Error checking transcription status: ${message}`);
         setTranscriptionStatus('idle');
         throw err;
       }
     }
-
+  
     throw new Error('Transcription timeout - please try again');
   };
 
