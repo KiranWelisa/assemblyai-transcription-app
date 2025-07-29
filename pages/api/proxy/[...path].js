@@ -5,7 +5,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  
+
   // Handle preflight requests
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -14,23 +14,23 @@ export default async function handler(req, res) {
 
   const { path } = req.query;
   const apiPath = Array.isArray(path) ? path.join('/') : path;
-  
+
   const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY;
   const ASSEMBLY_BASE_URL = 'https://api.assemblyai.com/v2';
 
   if (!ASSEMBLYAI_API_KEY) {
     console.error('AssemblyAI API key not found in environment variables');
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'AssemblyAI API key not configured',
       message: 'Please set ASSEMBLYAI_API_KEY in Vercel environment variables'
     });
   }
 
   try {
-    // Build the full URL
+    // Build the full URL to the AssemblyAI API
     const url = `${ASSEMBLY_BASE_URL}/${apiPath}${req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : ''}`;
-    
-    // Prepare headers
+
+    // Prepare headers, including the secret API key
     const headers = {
       'Authorization': ASSEMBLYAI_API_KEY,
     };
@@ -44,8 +44,8 @@ export default async function handler(req, res) {
     // Handle body based on content type
     if (req.method === 'POST' || req.method === 'PUT') {
       if (req.headers['content-type']?.includes('application/json')) {
-        // For JSON, we need to read and stringify the body
-        headers['Content-Type'] = 'application/json'; // ✅ Ensure header is set for JSON
+        // For JSON requests, forward the content type and body
+        headers['Content-Type'] = 'application/json';
         const chunks = [];
         for await (const chunk of req) {
           chunks.push(chunk);
@@ -53,31 +53,42 @@ export default async function handler(req, res) {
         const body = Buffer.concat(chunks).toString();
         fetchOptions.body = body;
       } else {
-        // For file uploads, stream the request directly
-        headers['Content-Type'] = req.headers['content-type']; // ✅ ADD THIS LINE
+        // For file uploads, forward the content type and stream the request body
+        headers['Content-Type'] = req.headers['content-type'];
         fetchOptions.body = req;
         fetchOptions.duplex = 'half';
       }
     }
 
-    // Make the request to AssemblyAI
+    // Make the request to the AssemblyAI API
     const response = await fetch(url, fetchOptions);
-    
-    // Get the response data
-    const data = await response.json();
-    
-    // Return the response with same status code
-    res.status(response.status).json(data);
+
+    // Robustly handle the response from AssemblyAI
+    const contentType = response.headers.get('content-type');
+    if (response.ok && contentType && contentType.includes('application/json')) {
+      // If the response is successful and is JSON, send it back to the client
+      const data = await response.json();
+      res.status(response.status).json(data);
+    } else {
+      // If the response is not ok or not JSON, handle it as an error
+      const errorText = await response.text();
+      console.error(`AssemblyAI Error (Status: ${response.status}): ${errorText}`);
+      res.status(response.status).json({
+        error: `Failed to communicate with AssemblyAI.`,
+        details: errorText || 'No response body from AssemblyAI.'
+      });
+    }
+
   } catch (error) {
     console.error('Proxy error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to proxy request to AssemblyAI',
-      details: error.message 
+      details: error.message
     });
   }
 }
 
-// Disable body parser to allow streaming
+// Disable Next.js's default body parser to allow for file streaming
 export const config = {
   api: {
     bodyParser: false,
