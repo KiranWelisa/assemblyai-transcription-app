@@ -125,7 +125,7 @@ const AssemblyAITranscription = () => {
         audio_url: audioUrl,
         language_code: language, // This should be 'nl' or 'en' based on user selection
         speaker_labels: true,
-        speech_model: 'best',
+        speech_model: 'universal',
         punctuate: true,
         format_text: true
       };
