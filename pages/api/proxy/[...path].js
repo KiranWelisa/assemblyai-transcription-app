@@ -35,12 +35,6 @@ export default async function handler(req, res) {
       'Authorization': ASSEMBLYAI_API_KEY,
     };
 
-    // For JSON requests, set content-type
-    if (req.headers['content-type']?.includes('application/json')) {
-      headers['Content-Type'] = 'application/json';
-    }
-    // For file uploads, don't set Content-Type - let fetch handle it
-
     // Prepare fetch options
     const fetchOptions = {
       method: req.method,
@@ -51,6 +45,7 @@ export default async function handler(req, res) {
     if (req.method === 'POST' || req.method === 'PUT') {
       if (req.headers['content-type']?.includes('application/json')) {
         // For JSON, we need to read and stringify the body
+        headers['Content-Type'] = 'application/json'; // ✅ Ensure header is set for JSON
         const chunks = [];
         for await (const chunk of req) {
           chunks.push(chunk);
@@ -59,6 +54,7 @@ export default async function handler(req, res) {
         fetchOptions.body = body;
       } else {
         // For file uploads, stream the request directly
+        headers['Content-Type'] = req.headers['content-type']; // ✅ ADD THIS LINE
         fetchOptions.body = req;
         fetchOptions.duplex = 'half';
       }
