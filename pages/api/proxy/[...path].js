@@ -35,10 +35,11 @@ export default async function handler(req, res) {
       'Authorization': ASSEMBLYAI_API_KEY,
     };
 
-    // Add content-type for POST requests with JSON body
-    if (req.method === 'POST' && req.headers['content-type']?.includes('application/json')) {
+    // For JSON requests, set content-type
+    if (req.headers['content-type']?.includes('application/json')) {
       headers['Content-Type'] = 'application/json';
     }
+    // For file uploads, don't set Content-Type - let fetch handle it
 
     // Prepare fetch options
     const fetchOptions = {
@@ -46,13 +47,20 @@ export default async function handler(req, res) {
       headers,
     };
 
-    // Handle body for POST/PUT requests
+    // Handle body based on content type
     if (req.method === 'POST' || req.method === 'PUT') {
       if (req.headers['content-type']?.includes('application/json')) {
-        fetchOptions.body = JSON.stringify(req.body);
+        // For JSON, we need to read and stringify the body
+        const chunks = [];
+        for await (const chunk of req) {
+          chunks.push(chunk);
+        }
+        const body = Buffer.concat(chunks).toString();
+        fetchOptions.body = body;
       } else {
-        // For file uploads, we need to handle the raw body
-        fetchOptions.body = await getRawBody(req);
+        // For file uploads, stream the request directly
+        fetchOptions.body = req;
+        fetchOptions.duplex = 'half';
       }
     }
 
@@ -73,20 +81,9 @@ export default async function handler(req, res) {
   }
 }
 
-// Helper function to get raw body for file uploads
-async function getRawBody(req) {
-  const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
-
-// Configure API route to handle large files
+// Disable body parser to allow streaming
 export const config = {
   api: {
-    bodyParser: {
-      sizeLimit: '2.2gb', // AssemblyAI max file size
-    },
+    bodyParser: false,
   },
 };
