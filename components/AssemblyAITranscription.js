@@ -28,8 +28,10 @@ const AssemblyAITranscription = () => {
   const [apiKey, setApiKey] = useState('');
   const [apiKeyInput, setApiKeyInput] = useState('');
   
-  // Nieuwe state voor het geselecteerde Google Drive-bestand
   const [driveFile, setDriveFile] = useState(null);
+  // Nieuwe state om de permissie-ID op te slaan voor later
+  const [drivePermissionId, setDrivePermissionId] = useState(null);
+
 
   useEffect(() => {
     if (session) {
@@ -56,7 +58,6 @@ const AssemblyAITranscription = () => {
     setPastTranscriptions([]);
   };
 
-  // --- Google Picker Logica ---
   const handleChooseFromDrive = () => {
     const developerKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
     if (!session?.accessToken || !developerKey) {
@@ -68,7 +69,7 @@ const AssemblyAITranscription = () => {
       if (data[google.picker.Response.ACTION] === google.picker.Action.PICKED) {
         const doc = data[google.picker.Response.DOCUMENTS][0];
         setDriveFile({ id: doc.id, name: doc.name });
-        setAudioUrl(''); // Maak URL-veld leeg
+        setAudioUrl('');
         setError(null);
       }
     };
@@ -87,19 +88,16 @@ const AssemblyAITranscription = () => {
       picker.setVisible(true);
     };
     
-    // Laad de Google Picker API
     gapi.load('picker', { callback: createPicker });
   };
   
   useEffect(() => {
-    // Laad het Google API script wanneer de component wordt geladen
     const script = document.createElement('script');
     script.src = 'https://apis.google.com/js/api.js';
     script.async = true;
     script.defer = true;
     document.body.appendChild(script);
   }, []);
-  // --- Einde Google Picker Logica ---
 
   const getLanguageDisplay = (languageCode) => {
     try {
@@ -178,24 +176,55 @@ const AssemblyAITranscription = () => {
 
   const startTranscription = async () => {
     if (!apiKey) return setError('Please provide your AssemblyAI API key.');
-
+    setError(null);
+  
+    let finalAudioUrl = audioUrl;
+  
+    // --- NIEUWE LOGICA VOOR GOOGLE DRIVE ---
     if (driveFile) {
-        // Logica voor Google Drive bestand wordt in de volgende stappen toegevoegd
-        alert(`Start transcriptie voor Google Drive bestand: ${driveFile.name} (ID: ${driveFile.id})`);
-        // Hier roepen we straks /api/drive/make-public aan
-    } else if (audioUrl) {
-        const directUrl = reformatGoogleDriveLink(audioUrl);
-        try {
-            const transcript = await createTranscription(directUrl);
-            setCurrentTranscriptId(transcript.id);
-            await pollTranscriptionStatus(transcript.id);
-            fetchPastTranscriptions(apiKey);
-        } catch (err) {
-            console.error('Transcription error:', err);
+      try {
+        setTranscriptionStatus('publishing'); // Een nieuwe status voor de gebruiker
+  
+        // 1. Roep onze eigen API aan om het bestand publiek te maken
+        const response = await fetch('/api/drive/make-public', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileId: driveFile.id }),
+        });
+  
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Could not make Google Drive file public.');
         }
-    } else {
-        return setError('Please provide a URL or select a file from Google Drive.');
+  
+        const { publicUrl, permissionId } = await response.json();
+        
+        // Sla de data op voor later gebruik
+        finalAudioUrl = publicUrl;
+        setDrivePermissionId(permissionId);
+  
+      } catch (err) {
+        console.error('Error making file public:', err);
+        setError(`Error making file public: ${err.message}`);
+        setTranscriptionStatus('idle');
+        return; // Stop het proces als dit mislukt
+      }
     }
+    // --- EINDE NIEUWE LOGICA ---
+  
+    if (!finalAudioUrl) {
+      return setError('Please provide a URL or select a file from Google Drive.');
+    }
+  
+    try {
+      const transcript = await createTranscription(finalAudioUrl);
+      setCurrentTranscriptId(transcript.id);
+      await pollTranscriptionStatus(transcript.id);
+      fetchPastTranscriptions(apiKey);
+    } catch (err) {
+      console.error('Transcription error:', err);
+    }
+    // TODO: In de volgende stap roepen we hier /api/drive/make-private aan
   };
 
 
