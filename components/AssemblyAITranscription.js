@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+// Volledige inhoud voor: components/AssemblyAITranscription.js
+import React, { useState, useEffect, useRef } from 'react';
 import { Upload, Link, Globe, Loader2, User, ChevronDown, ChevronUp, CheckCircle, AlertCircle, Key, X, File } from 'lucide-react';
 import { useSession, signIn, signOut } from 'next-auth/react';
 
@@ -29,6 +30,7 @@ const AssemblyAITranscription = () => {
   const [apiKeyInput, setApiKeyInput] = useState('');
   
   const [driveFile, setDriveFile] = useState(null);
+  const pickerLoadedRef = useRef(false);
 
   useEffect(() => {
     if (session) {
@@ -55,79 +57,111 @@ const AssemblyAITranscription = () => {
     setPastTranscriptions([]);
   };
 
-  const handleChooseFromDrive = () => {
-    const developerKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
-    const appId = process.env.NEXT_PUBLIC_GOOGLE_APP_ID;
-     
-    if (!session?.accessToken || !developerKey || !appId) {
-      setError('Google-authenticatie is niet correct geconfigureerd.');
+  // --- START: GECORRIGEERDE GOOGLE PICKER LOGICA (gebaseerd op Claude's analyse) ---
+  useEffect(() => {
+    if (document.querySelector('script#google-api-script')) {
       return;
     }
-  
+
+    const script = document.createElement('script');
+    script.id = 'google-api-script';
+    script.src = 'https://apis.google.com/js/api.js';
+    script.async = true;
+    script.defer = true;
+    
+    script.onload = () => {
+      console.log('Google API script loaded successfully');
+      if (window.gapi) {
+        window.gapi.load('picker', {
+          callback: () => {
+            console.log('Google Picker library preloaded');
+            pickerLoadedRef.current = true;
+          },
+          onerror: () => console.error('Failed to load Google Picker library')
+        });
+      }
+    };
+    
+    script.onerror = () => console.error('Failed to load Google API script');
+    
+    document.head.appendChild(script);
+    
+    return () => {
+      const scriptEl = document.querySelector('script#google-api-script');
+      if (scriptEl) {
+        scriptEl.remove();
+      }
+    };
+  }, []);
+
+  const handleChooseFromDrive = async () => {
+    const developerKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    const appId = process.env.NEXT_PUBLIC_GOOGLE_APP_ID;
+
+    if (!session?.accessToken) {
+      setError('Je bent niet ingelogd. Log eerst in met Google.');
+      return;
+    }
+    
+    if (!developerKey || !clientId || !appId) {
+      setError('Google configuratie ontbreekt. Controleer environment variabelen.');
+      return;
+    }
+    
+    if (session.error === "AccessTokenExpired") {
+      setError('Je sessie is verlopen. Log opnieuw in.');
+      signOut();
+      return;
+    }
+    
+    if (!window.gapi || !pickerLoadedRef.current) {
+      setError('Google API wordt nog geladen. Probeer het over een paar seconden opnieuw.');
+      return;
+    }
+    
     const pickerCallback = (data) => {
       if (data[google.picker.Response.ACTION] === google.picker.Action.PICKED) {
         const doc = data[google.picker.Response.DOCUMENTS][0];
-        console.log('Selected file:', doc); // Debug log
-        setDriveFile({ id: doc.id, name: doc.name });
+        console.log('Selected file:', doc);
+        setDriveFile({ id: doc.id, name: doc.name, mimeType: doc.mimeType });
         setAudioUrl('');
         setError(null);
       } else if (data[google.picker.Response.ACTION] === google.picker.Action.CANCEL) {
-        console.log('Picker cancelled');
+        console.log('Picker cancelled by user');
       }
     };
-  
-    const createPicker = () => {
+    
+    const createAndShowPicker = () => {
       try {
-        // Log de waarden direct voordat ze worden gebruikt
-        console.log('OAuth Token:', session.accessToken);
-        console.log('Developer Key:', developerKey);
-        console.log('App ID:', appId);
-        console.log('Origin:', window.location.protocol + '//' + window.location.host);
-
-        const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
-          .setIncludeFolders(false)
-          .setMimeTypes("audio/*,video/*");
-  
+        console.log('Creating picker with:', { appId, hasToken: !!session.accessToken, hasDeveloperKey: !!developerKey });
+        
+        const audioView = new google.picker.DocsView().setIncludeFolders(false).setSelectFolderEnabled(false).setMimeTypes('audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/webm,audio/aac,audio/flac,audio/x-m4a');
+        const videoView = new google.picker.DocsView().setIncludeFolders(false).setSelectFolderEnabled(false).setMimeTypes('video/mp4,video/webm,video/ogg,video/mov,video/avi,video/wmv,video/flv,video/mkv');
+        
         const picker = new google.picker.PickerBuilder()
           .setAppId(appId)
-          .addView(view)
           .setOAuthToken(session.accessToken)
           .setDeveloperKey(developerKey)
+          .addView(audioView)
+          .addView(videoView)
+          .addView(new google.picker.DocsUploadView())
           .setCallback(pickerCallback)
+          .setTitle('Selecteer een audio of video bestand')
           .setOrigin(window.location.protocol + '//' + window.location.host)
+          .setMaxItems(1)
           .build();
-         
+          
         picker.setVisible(true);
       } catch (error) {
         console.error('Error creating picker:', error);
-        setError('Fout bij het maken van de Google Picker.');
+        setError('Er ging iets mis bij het openen van de Google Picker: ' + error.message);
       }
     };
-     
-    gapi.load('picker', {
-      callback: createPicker,
-      onerror: () => {
-        console.error('Failed to load Google API');
-        setError('Kon Google API niet laden.');
-      }
-    });
+    
+    createAndShowPicker();
   };
-
-  useEffect(() => {
-    if (!document.querySelector('script[src="https://apis.google.com/js/api.js"]')) {
-      const script = document.createElement('script');
-      script.src = 'https://apis.google.com/js/api.js';
-      script.async = true;
-      script.defer = true;
-      script.onload = () => {
-        console.log('Google API script loaded');
-      };
-      script.onerror = () => {
-        console.error('Failed to load Google API script');
-      };
-      document.body.appendChild(script);
-    }
-  }, []);
+  // --- EINDE: GECORRIGEERDE GOOGLE PICKER LOGICA ---
 
   const getLanguageDisplay = (languageCode) => {
     try {
