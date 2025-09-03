@@ -55,62 +55,79 @@ const AssemblyAITranscription = () => {
     setPastTranscriptions([]);
   };
 
-  // --- START: GECORRIGEERDE GOOGLE PICKER LOGICA ---
   const handleChooseFromDrive = () => {
     const developerKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
-    const appId = process.env.NEXT_PUBLIC_GOOGLE_APP_ID; // Gebruik de nieuwe environment variable
-
+    const appId = process.env.NEXT_PUBLIC_GOOGLE_APP_ID;
+     
     if (!session?.accessToken || !developerKey || !appId) {
-      setError('Google-authenticatie is niet correct geconfigureerd. Controleer alle environment variables.');
+      setError('Google-authenticatie is niet correct geconfigureerd.');
       return;
     }
-
+  
     const pickerCallback = (data) => {
       if (data[google.picker.Response.ACTION] === google.picker.Action.PICKED) {
         const doc = data[google.picker.Response.DOCUMENTS][0];
+        console.log('Selected file:', doc); // Debug log
         setDriveFile({ id: doc.id, name: doc.name });
         setAudioUrl('');
         setError(null);
+      } else if (data[google.picker.Response.ACTION] === google.picker.Action.CANCEL) {
+        console.log('Picker cancelled');
       }
     };
-
+  
     const createPicker = () => {
       try {
+        // Log de waarden direct voordat ze worden gebruikt
+        console.log('OAuth Token:', session.accessToken);
+        console.log('Developer Key:', developerKey);
+        console.log('App ID:', appId);
+        console.log('Origin:', window.location.protocol + '//' + window.location.host);
+
         const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
           .setIncludeFolders(false)
           .setMimeTypes("audio/*,video/*");
-
+  
         const picker = new google.picker.PickerBuilder()
           .setAppId(appId)
           .addView(view)
           .setOAuthToken(session.accessToken)
           .setDeveloperKey(developerKey)
           .setCallback(pickerCallback)
-          .setOrigin(window.location.protocol + '//' + window.location.host) // Essentiële toevoeging
+          .setOrigin(window.location.protocol + '//' + window.location.host)
           .build();
+         
         picker.setVisible(true);
       } catch (error) {
         console.error('Error creating picker:', error);
         setError('Fout bij het maken van de Google Picker.');
       }
     };
-    
-    // Laad 'client' samen met 'picker' om de benodigde initialisatie te doen
-    gapi.load('picker', createPicker);
+     
+    gapi.load('picker', {
+      callback: createPicker,
+      onerror: () => {
+        console.error('Failed to load Google API');
+        setError('Kon Google API niet laden.');
+      }
+    });
   };
-  
+
   useEffect(() => {
-    // Zorg ervoor dat het Google API-script slechts één keer wordt geladen
     if (!document.querySelector('script[src="https://apis.google.com/js/api.js"]')) {
       const script = document.createElement('script');
       script.src = 'https://apis.google.com/js/api.js';
       script.async = true;
       script.defer = true;
-      script.onload = () => gapi.load('client', () => {}); // Laad de basis client-bibliotheek
+      script.onload = () => {
+        console.log('Google API script loaded');
+      };
+      script.onerror = () => {
+        console.error('Failed to load Google API script');
+      };
       document.body.appendChild(script);
     }
   }, []);
-  // --- EINDE: GECORRIGEERDE GOOGLE PICKER LOGICA ---
 
   const getLanguageDisplay = (languageCode) => {
     try {
@@ -246,6 +263,7 @@ const AssemblyAITranscription = () => {
           console.error('CRITICAL: Failed to revoke file permission:', revokeError);
           setError('Transcription finished, but failed to make the Google Drive file private again. Please check the file permissions manually.');
         }
+
         setDriveFile(null);
       }
     }
