@@ -1,18 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Link, Globe, Loader2, User, ChevronDown, ChevronUp, CheckCircle, AlertCircle } from 'lucide-react';
+import { Upload, Link, Globe, Loader2, User, ChevronDown, ChevronUp, CheckCircle, AlertCircle, Key, X } from 'lucide-react';
 
-// ✅ NEW: Helper function to reformat Google Drive links
 const reformatGoogleDriveLink = (url) => {
   const regex = /drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/;
   const match = url.match(regex);
 
-  // If it's a standard Google Drive link, reformat it
   if (match && match[1]) {
     const fileId = match[1];
     return `https://drive.google.com/uc?export=download&id=${fileId}`;
   }
 
-  // Otherwise, return the original URL
   return url;
 };
 
@@ -25,8 +22,34 @@ const AssemblyAITranscription = () => {
   const [pastTranscriptions, setPastTranscriptions] = useState([]);
   const [showPastTranscriptions, setShowPastTranscriptions] = useState(true);
   const [error, setError] = useState(null);
+  const [apiKey, setApiKey] = useState('');
 
-  const API_BASE_URL = '/api/proxy';
+  // New state for API Key input
+  const [apiKeyInput, setApiKeyInput] = useState('');
+
+  // Load API Key from localStorage on component mount
+  useEffect(() => {
+    const storedKey = localStorage.getItem('assemblyai_api_key');
+    if (storedKey) {
+      setApiKey(storedKey);
+      fetchPastTranscriptions(storedKey);
+    }
+  }, []);
+
+  const handleApiKeySave = () => {
+    if (apiKeyInput) {
+      localStorage.setItem('assemblyai_api_key', apiKeyInput);
+      setApiKey(apiKeyInput);
+      setApiKeyInput('');
+      fetchPastTranscriptions(apiKeyInput);
+    }
+  };
+
+  const handleApiKeyClear = () => {
+    localStorage.removeItem('assemblyai_api_key');
+    setApiKey('');
+    setPastTranscriptions([]);
+  };
 
   const getLanguageDisplay = (languageCode) => {
     try {
@@ -42,6 +65,11 @@ const AssemblyAITranscription = () => {
   };
 
   const createTranscription = async (url) => {
+    if (!apiKey) {
+      setError('Please provide your AssemblyAI API key first.');
+      setTranscriptionStatus('idle');
+      return;
+    }
     setTranscriptionStatus('transcribing');
     setError(null);
     try {
@@ -54,9 +82,12 @@ const AssemblyAITranscription = () => {
         format_text: true
       };
 
-      const response = await fetch(`${API_BASE_URL}/transcript`, {
+      const response = await fetch('https://api.assemblyai.com/v2/transcript', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': apiKey
+        },
         body: JSON.stringify(requestBody)
       });
 
@@ -75,10 +106,19 @@ const AssemblyAITranscription = () => {
   };
 
   const pollTranscriptionStatus = async (transcriptId) => {
+    if (!apiKey) {
+      setError('API key is missing.');
+      setTranscriptionStatus('idle');
+      return;
+    }
     const maxAttempts = 200;
     for (let attempts = 0; attempts < maxAttempts; attempts++) {
       try {
-        const response = await fetch(`${API_BASE_URL}/transcript/${transcriptId}`);
+        const response = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
+          headers: {
+            'Authorization': apiKey
+          }
+        });
         if (!response.ok) {
           const errorData = await response.json();
           throw new Error(errorData.error || 'Failed to fetch transcript status');
@@ -109,23 +149,30 @@ const AssemblyAITranscription = () => {
       setError('Please enter a public URL for an audio or video file.');
       return;
     }
+    if (!apiKey) {
+      setError('Please provide your AssemblyAI API key first.');
+      return;
+    }
     
-    // ✅ Use the helper function to get a direct link
     const directUrl = reformatGoogleDriveLink(audioUrl);
 
     try {
       const transcript = await createTranscription(directUrl);
       setCurrentTranscriptId(transcript.id);
       await pollTranscriptionStatus(transcript.id);
-      fetchPastTranscriptions();
+      fetchPastTranscriptions(apiKey);
     } catch (err) {
       console.error('Transcription error:', err);
     }
   };
 
-  const fetchPastTranscriptions = async () => {
+  const fetchPastTranscriptions = async (key) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/transcript?limit=20`);
+      const response = await fetch('https://api.assemblyai.com/v2/transcript?limit=20', {
+        headers: {
+          'Authorization': key
+        }
+      });
       if (!response.ok) {
         console.error('Failed to fetch transcriptions, status:', response.status);
         return;
@@ -156,10 +203,6 @@ const AssemblyAITranscription = () => {
 
   const formatDate = (dateString) => new Date(dateString).toLocaleString();
 
-  useEffect(() => {
-    fetchPastTranscriptions();
-  }, []);
-
   return (
     <div className="min-h-screen bg-gray-50 p-4">
       <div className="max-w-4xl mx-auto">
@@ -168,49 +211,88 @@ const AssemblyAITranscription = () => {
           <p className="text-center text-gray-600">Enter a public link to an audio/video file for transcription</p>
         </div>
 
-        {/* Language Selector */}
-        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Globe className="w-5 h-5 text-gray-600" />
-              <span className="font-medium">Transcription Language</span>
+        {apiKey ? (
+          <>
+            <div className="bg-white rounded-lg shadow-lg p-6 mb-6 flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <Key className="w-5 h-5 text-gray-600" />
+                <span className="font-medium">API Key is configured</span>
+              </div>
+              <button onClick={handleApiKeyClear} className="text-red-600 hover:text-red-700">
+                <X className="w-5 h-5" />
+              </button>
             </div>
-            <div className="flex gap-2">
-              <button onClick={() => setLanguage('nl')} className={`px-4 py-2 rounded-lg transition-colors ${language === 'nl' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>🇳🇱 Dutch</button>
-              <button onClick={() => setLanguage('en')} className={`px-4 py-2 rounded-lg transition-colors ${language === 'en' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>🇬🇧 English</button>
+            
+            <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Globe className="w-5 h-5 text-gray-600" />
+                  <span className="font-medium">Transcription Language</span>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => setLanguage('nl')} className={`px-4 py-2 rounded-lg transition-colors ${language === 'nl' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>🇳🇱 Dutch</button>
+                  <button onClick={() => setLanguage('en')} className={`px-4 py-2 rounded-lg transition-colors ${language === 'en' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>🇬🇧 English</button>
+                </div>
+              </div>
             </div>
+
+            <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+              <div className="flex items-center border border-gray-300 rounded-lg p-2 focus-within:ring-2 focus-within:ring-blue-500">
+                <Link className="w-6 h-6 mx-2 text-gray-400" />
+                <input
+                  type="text"
+                  value={audioUrl}
+                  onChange={(e) => setAudioUrl(e.target.value)}
+                  placeholder="Paste a public audio/video URL here..."
+                  className="w-full bg-transparent outline-none text-lg"
+                />
+              </div>
+
+              {error && <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">{error}</div>}
+
+              <button
+                onClick={startTranscription}
+                disabled={!audioUrl || transcriptionStatus !== 'idle'}
+                className="mt-4 w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+              >
+                {transcriptionStatus === 'idle' ? <><Upload className="w-5 h-5" /> Start Transcription</> : <><Loader2 className="w-5 h-5 animate-spin" /> {transcriptionStatus === 'transcribing' ? 'Creating transcription...' : 'Processing audio...'}</>}
+              </button>
+            </div>
+            
+            {currentTranscript && transcriptionStatus === 'completed' && (
+              <div className="mb-6"><TranscriptDisplay transcript={currentTranscript} formatTime={formatTime} getLanguageDisplay={getLanguageDisplay} /></div>
+            )}
+            
+            <PastTranscriptionsList pastTranscriptions={pastTranscriptions} loadPastTranscription={loadPastTranscription} showPastTranscriptions={showPastTranscriptions} setShowPastTranscriptions={setShowPastTranscriptions} getLanguageDisplay={getLanguageDisplay} formatDate={formatDate} formatTime={formatTime} />
+          </>
+        ) : (
+          <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+            <h3 className="text-lg font-semibold mb-4">Enter your AssemblyAI API Key</h3>
+            <p className="text-sm text-gray-600 mb-4">Your key will be stored securely in your browser's local storage.</p>
+            <div className="flex items-center gap-2 mb-4">
+              <input
+                type="password"
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                placeholder="Paste your API key here..."
+                className="w-full p-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <button
+                onClick={handleApiKeySave}
+                disabled={!apiKeyInput}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 transition-colors"
+              >
+                Save
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">
+              You can get your free API key from the AssemblyAI dashboard.
+              <a href="https://www.assemblyai.com/dashboard/signup" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline ml-1">
+                Click here to sign up.
+              </a>
+            </p>
           </div>
-        </div>
-
-        {/* URL Input Area */}
-        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-          <div className="flex items-center border border-gray-300 rounded-lg p-2 focus-within:ring-2 focus-within:ring-blue-500">
-            <Link className="w-6 h-6 mx-2 text-gray-400" />
-            <input
-              type="text"
-              value={audioUrl}
-              onChange={(e) => setAudioUrl(e.target.value)}
-              placeholder="Paste a public audio/video URL here..."
-              className="w-full bg-transparent outline-none text-lg"
-            />
-          </div>
-
-          {error && <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">{error}</div>}
-
-          <button
-            onClick={startTranscription}
-            disabled={!audioUrl || transcriptionStatus !== 'idle'}
-            className="mt-4 w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
-          >
-            {transcriptionStatus === 'idle' ? <><Upload className="w-5 h-5" /> Start Transcription</> : <><Loader2 className="w-5 h-5 animate-spin" /> {transcriptionStatus === 'transcribing' ? 'Creating transcription...' : 'Processing audio...'}</>}
-          </button>
-        </div>
-
-        {currentTranscript && transcriptionStatus === 'completed' && (
-          <div className="mb-6"><TranscriptDisplay transcript={currentTranscript} formatTime={formatTime} getLanguageDisplay={getLanguageDisplay} /></div>
         )}
-
-        <PastTranscriptionsList pastTranscriptions={pastTranscriptions} loadPastTranscription={loadPastTranscription} showPastTranscriptions={showPastTranscriptions} setShowPastTranscriptions={setShowPastTranscriptions} getLanguageDisplay={getLanguageDisplay} formatDate={formatDate} formatTime={formatTime} />
       </div>
     </div>
   );
