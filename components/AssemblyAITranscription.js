@@ -29,7 +29,6 @@ const AssemblyAITranscription = () => {
   const [apiKeyInput, setApiKeyInput] = useState('');
   
   const [driveFile, setDriveFile] = useState(null);
-  // Nieuwe state om de permissie-ID op te slaan voor later
   const [drivePermissionId, setDrivePermissionId] = useState(null);
 
 
@@ -179,17 +178,17 @@ const AssemblyAITranscription = () => {
     setError(null);
   
     let finalAudioUrl = audioUrl;
+    let localDriveFile = driveFile;
+    let localPermissionId = null;
   
-    // --- NIEUWE LOGICA VOOR GOOGLE DRIVE ---
-    if (driveFile) {
-      try {
-        setTranscriptionStatus('publishing'); // Een nieuwe status voor de gebruiker
-  
-        // 1. Roep onze eigen API aan om het bestand publiek te maken
+    try {
+      if (localDriveFile) {
+        setTranscriptionStatus('publishing');
+        
         const response = await fetch('/api/drive/make-public', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileId: driveFile.id }),
+          body: JSON.stringify({ fileId: localDriveFile.id }),
         });
   
         if (!response.ok) {
@@ -199,32 +198,46 @@ const AssemblyAITranscription = () => {
   
         const { publicUrl, permissionId } = await response.json();
         
-        // Sla de data op voor later gebruik
         finalAudioUrl = publicUrl;
-        setDrivePermissionId(permissionId);
+        localPermissionId = permissionId; // Gebruik lokale variabele binnen de functie
   
-      } catch (err) {
-        console.error('Error making file public:', err);
-        setError(`Error making file public: ${err.message}`);
-        setTranscriptionStatus('idle');
-        return; // Stop het proces als dit mislukt
       }
-    }
-    // --- EINDE NIEUWE LOGICA ---
+      
+      if (!finalAudioUrl) {
+        return setError('Please provide a URL or select a file from Google Drive.');
+      }
   
-    if (!finalAudioUrl) {
-      return setError('Please provide a URL or select a file from Google Drive.');
-    }
-  
-    try {
       const transcript = await createTranscription(finalAudioUrl);
       setCurrentTranscriptId(transcript.id);
       await pollTranscriptionStatus(transcript.id);
       fetchPastTranscriptions(apiKey);
+
     } catch (err) {
-      console.error('Transcription error:', err);
+      console.error('Transcription process error:', err);
+      setError(`Transcription process error: ${err.message}`);
+      setTranscriptionStatus('idle');
+    } finally {
+      // --- DEFINITIEVE LOGICA OM BESTAND WEER PRIVÉ TE MAKEN ---
+      if (localDriveFile && localPermissionId) {
+        console.log(`Revoking permission ${localPermissionId} for file ${localDriveFile.id}`);
+        try {
+          await fetch('/api/drive/make-private', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileId: localDriveFile.id,
+              permissionId: localPermissionId,
+            }),
+          });
+        } catch (revokeError) {
+          console.error('CRITICAL: Failed to revoke file permission:', revokeError);
+          setError('Transcription finished, but failed to make the Google Drive file private again. Please check the file permissions manually.');
+        }
+        // Reset de state
+        setDriveFile(null);
+        setDrivePermissionId(null);
+      }
     }
-    // TODO: In de volgende stap roepen we hier /api/drive/make-private aan
   };
 
 
@@ -359,9 +372,9 @@ const AssemblyAITranscription = () => {
                   <button
                     onClick={startTranscription}
                     disabled={isTranscriptionDisabled}
-                    className="mt-6 w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 disabled:bg-gray-300"
+                    className="mt-6 w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 disabled:bg-gray-300 flex items-center justify-center gap-2"
                   >
-                    Start Transcriptie
+                    {transcriptionStatus === 'idle' ? <><Upload className="w-5 h-5" /> Start Transcriptie</> : <><Loader2 className="w-5 h-5 animate-spin" /> {transcriptionStatus === 'publishing' ? 'Bestand voorbereiden...' : transcriptionStatus === 'transcribing' ? 'Transcriptie aanmaken...' : 'Audio verwerken...'}</>}
                   </button>
                 </div>
 
