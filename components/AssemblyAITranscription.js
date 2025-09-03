@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Link, Globe, Loader2, User, ChevronDown, ChevronUp, CheckCircle, AlertCircle, Key, X } from 'lucide-react';
+import { Upload, Link, Globe, Loader2, User, ChevronDown, ChevronUp, CheckCircle, AlertCircle, Key, X, File } from 'lucide-react';
 import { useSession, signIn, signOut } from 'next-auth/react';
 
 const reformatGoogleDriveLink = (url) => {
@@ -25,11 +25,12 @@ const AssemblyAITranscription = () => {
   const [showPastTranscriptions, setShowPastTranscriptions] = useState(true);
   const [error, setError] = useState(null);
   
-  // API Key state en logica is terug!
   const [apiKey, setApiKey] = useState('');
   const [apiKeyInput, setApiKeyInput] = useState('');
+  
+  // Nieuwe state voor het geselecteerde Google Drive-bestand
+  const [driveFile, setDriveFile] = useState(null);
 
-  // Laad de AssemblyAI API key uit localStorage als de component laadt
   useEffect(() => {
     if (session) {
       const storedKey = localStorage.getItem('assemblyai_api_key');
@@ -38,7 +39,7 @@ const AssemblyAITranscription = () => {
         fetchPastTranscriptions(storedKey);
       }
     }
-  }, [session]); // Draai dit effect alleen als de sessie verandert
+  }, [session]);
 
   const handleApiKeySave = () => {
     if (apiKeyInput) {
@@ -55,6 +56,50 @@ const AssemblyAITranscription = () => {
     setPastTranscriptions([]);
   };
 
+  // --- Google Picker Logica ---
+  const handleChooseFromDrive = () => {
+    const developerKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
+    if (!session?.accessToken || !developerKey) {
+      setError('Google-authenticatie is niet correct geconfigureerd.');
+      return;
+    }
+
+    const pickerCallback = (data) => {
+      if (data[google.picker.Response.ACTION] === google.picker.Action.PICKED) {
+        const doc = data[google.picker.Response.DOCUMENTS][0];
+        setDriveFile({ id: doc.id, name: doc.name });
+        setAudioUrl(''); // Maak URL-veld leeg
+        setError(null);
+      }
+    };
+
+    const createPicker = () => {
+      const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+        .setIncludeFolders(false)
+        .setMimeTypes("audio/*,video/*");
+
+      const picker = new google.picker.PickerBuilder()
+        .addView(view)
+        .setOAuthToken(session.accessToken)
+        .setDeveloperKey(developerKey)
+        .setCallback(pickerCallback)
+        .build();
+      picker.setVisible(true);
+    };
+    
+    // Laad de Google Picker API
+    gapi.load('picker', { callback: createPicker });
+  };
+  
+  useEffect(() => {
+    // Laad het Google API script wanneer de component wordt geladen
+    const script = document.createElement('script');
+    script.src = 'https://apis.google.com/js/api.js';
+    script.async = true;
+    script.defer = true;
+    document.body.appendChild(script);
+  }, []);
+  // --- Einde Google Picker Logica ---
 
   const getLanguageDisplay = (languageCode) => {
     try {
@@ -69,7 +114,6 @@ const AssemblyAITranscription = () => {
     }
   };
 
-  // Functies praten nu weer direct met AssemblyAI, met de sleutel van de gebruiker
   const createTranscription = async (url) => {
     if (!apiKey) {
       setError('Please provide your AssemblyAI API key first.');
@@ -83,7 +127,7 @@ const AssemblyAITranscription = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': apiKey, // Gebruik de sleutel van de gebruiker
+          'Authorization': apiKey,
         },
         body: JSON.stringify({
           audio_url: url,
@@ -109,7 +153,7 @@ const AssemblyAITranscription = () => {
     for (let attempts = 0; attempts < 200; attempts++) {
       try {
         const response = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
-          headers: { 'Authorization': apiKey } // Gebruik de sleutel van de gebruiker
+          headers: { 'Authorization': apiKey }
         });
         if (!response.ok) throw new Error('Failed to fetch transcript status');
         
@@ -133,19 +177,27 @@ const AssemblyAITranscription = () => {
   };
 
   const startTranscription = async () => {
-    if (!audioUrl) return setError('Please provide a URL.');
     if (!apiKey) return setError('Please provide your AssemblyAI API key.');
-    
-    const directUrl = reformatGoogleDriveLink(audioUrl);
-    try {
-      const transcript = await createTranscription(directUrl);
-      setCurrentTranscriptId(transcript.id);
-      await pollTranscriptionStatus(transcript.id);
-      fetchPastTranscriptions(apiKey);
-    } catch (err) {
-      console.error('Transcription error:', err);
+
+    if (driveFile) {
+        // Logica voor Google Drive bestand wordt in de volgende stappen toegevoegd
+        alert(`Start transcriptie voor Google Drive bestand: ${driveFile.name} (ID: ${driveFile.id})`);
+        // Hier roepen we straks /api/drive/make-public aan
+    } else if (audioUrl) {
+        const directUrl = reformatGoogleDriveLink(audioUrl);
+        try {
+            const transcript = await createTranscription(directUrl);
+            setCurrentTranscriptId(transcript.id);
+            await pollTranscriptionStatus(transcript.id);
+            fetchPastTranscriptions(apiKey);
+        } catch (err) {
+            console.error('Transcription error:', err);
+        }
+    } else {
+        return setError('Please provide a URL or select a file from Google Drive.');
     }
   };
+
 
   const fetchPastTranscriptions = async (key) => {
     if (!key) return;
@@ -175,6 +227,9 @@ const AssemblyAITranscription = () => {
   };
 
   const formatDate = (dateString) => new Date(dateString).toLocaleString();
+  
+  const isTranscriptionDisabled = (!audioUrl && !driveFile) || transcriptionStatus !== 'idle';
+
 
   return (
     <div className="min-h-screen bg-gray-50 p-4">
@@ -232,23 +287,50 @@ const AssemblyAITranscription = () => {
                   </button>
                 </div>
 
-                {/* Hier komt de Google Drive knop en de rest van de UI */}
                 <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-                  <div className="flex items-center border border-gray-300 rounded-lg p-2 focus-within:ring-2 focus-within:ring-blue-500">
-                    <Link className="w-6 h-6 mx-2 text-gray-400" />
-                    <input
-                      type="text"
-                      value={audioUrl}
-                      onChange={(e) => setAudioUrl(e.target.value)}
-                      placeholder="Plak hier een publieke URL..."
-                      className="w-full bg-transparent outline-none text-lg"
-                    />
-                  </div>
+                    {driveFile ? (
+                        <div className="flex items-center justify-between p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                            <div className='flex items-center gap-2'>
+                                <File className="w-5 h-5 text-blue-600" />
+                                <span className='font-medium text-blue-800'>{driveFile.name}</span>
+                            </div>
+                            <button onClick={() => setDriveFile(null)} className="text-gray-500 hover:text-gray-700">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                    ) : (
+                        <div>
+                            <div className="flex items-center border border-gray-300 rounded-lg p-2 focus-within:ring-2 focus-within:ring-blue-500">
+                                <Link className="w-6 h-6 mx-2 text-gray-400" />
+                                <input
+                                    type="text"
+                                    value={audioUrl}
+                                    onChange={(e) => setAudioUrl(e.target.value)}
+                                    placeholder="Plak hier een publieke URL..."
+                                    className="w-full bg-transparent outline-none text-lg"
+                                />
+                            </div>
+
+                            <div className="relative flex py-4 items-center">
+                                <div className="flex-grow border-t border-gray-300"></div>
+                                <span className="flex-shrink mx-4 text-gray-500">of</span>
+                                <div className="flex-grow border-t border-gray-300"></div>
+                            </div>
+
+                            <button
+                                onClick={handleChooseFromDrive}
+                                className="w-full bg-white border-2 border-gray-300 text-gray-700 py-3 px-6 rounded-lg hover:bg-gray-100 transition-colors flex items-center justify-center gap-2"
+                            >
+                                <svg className="w-6 h-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path fill="#fbc02d" d="M313 118l-42 73-85 147.5L144 256h224l-55-98z"/><path fill="#4caf50" d="M144 256l85 147.5L271 496h141L144 256z"/><path fill="#2196f3" d="M412 496L271 256 144 256 0 496z"/><path fill="#fbc02d" d="M144 256L0 0h144z"/><path fill="#4caf50" d="M144 0h142l-42 73-85-73z"/><path fill="#2196f3" d="M286 0h141l-85 148-42-73z"/></svg>
+                                Kies uit Google Drive
+                            </button>
+                        </div>
+                    )}
                   {error && <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">{error}</div>}
                   <button
                     onClick={startTranscription}
-                    disabled={!audioUrl || transcriptionStatus !== 'idle'}
-                    className="mt-4 w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 disabled:bg-gray-300"
+                    disabled={isTranscriptionDisabled}
+                    className="mt-6 w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 disabled:bg-gray-300"
                   >
                     Start Transcriptie
                   </button>
@@ -280,8 +362,78 @@ const AssemblyAITranscription = () => {
   );
 };
 
-// De TranscriptDisplay en PastTranscriptionsList componenten blijven ongewijzigd
-const TranscriptDisplay = ({ transcript, formatTime, getLanguageDisplay }) => { /* ... ongewijzigde code ... */ };
-const PastTranscriptionsList = ({ pastTranscriptions, loadPastTranscription, showPastTranscriptions, setShowPastTranscriptions, getLanguageDisplay, formatDate, formatTime }) => { /* ... ongewijzigde code ... */ };
+const TranscriptDisplay = ({ transcript, formatTime, getLanguageDisplay }) => {
+  const speakerColors = ['text-blue-600', 'text-green-600', 'text-purple-600', 'text-orange-600'];
+  return (
+    <div className="bg-white rounded-lg shadow-lg p-6">
+      <div className="mb-4">
+        <h3 className="text-lg font-semibold mb-2">Transcription Result</h3>
+        <div className="flex items-center gap-4 text-sm text-gray-600">
+          <span>Language: {getLanguageDisplay(transcript.language_code)}</span>
+          <span>Duration: {formatTime(transcript.audio_duration)}</span>
+          <span>Words: {transcript.words?.length || 0}</span>
+        </div>
+      </div>
+      <div className="space-y-3 max-h-96 overflow-y-auto">
+        {transcript.utterances?.map((utterance, index) => (
+          <div key={index} className="flex gap-3 p-3 hover:bg-gray-50 rounded">
+            <div className="flex items-center gap-2 min-w-fit">
+              <User className={`w-5 h-5 ${speakerColors[utterance.speaker.charCodeAt(0) % 4]}`} />
+              <span className={`font-medium ${speakerColors[utterance.speaker.charCodeAt(0) % 4]}`}>Speaker {utterance.speaker}</span>
+            </div>
+            <div className="flex-1">
+              <p className="text-gray-800">{utterance.text}</p>
+              <span className="text-xs text-gray-500">{formatTime(utterance.start / 1000)} - {formatTime(utterance.end / 1000)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 pt-4 border-t">
+        <button onClick={() => {
+          const text = transcript.utterances.map(u => `Speaker ${u.speaker}: ${u.text}`).join('\n\n');
+          const blob = new Blob([text], { type: 'text/plain' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `transcript-${transcript.id}.txt`;
+          a.click();
+        }} className="text-blue-600 hover:text-blue-700 text-sm font-medium">Download Transcript</button>
+      </div>
+    </div>
+  );
+};
+
+const PastTranscriptionsList = ({ pastTranscriptions, loadPastTranscription, showPastTranscriptions, setShowPastTranscriptions, getLanguageDisplay, formatDate, formatTime }) => (
+  <div className="bg-white rounded-lg shadow-lg p-6">
+    <div className="flex items-center justify-between mb-4">
+      <h3 className="text-lg font-semibold">Past Transcriptions</h3>
+      <button onClick={() => setShowPastTranscriptions(!showPastTranscriptions)} className="text-blue-600 hover:text-blue-700">{showPastTranscriptions ? <ChevronUp /> : <ChevronDown />}</button>
+    </div>
+    {showPastTranscriptions && (
+      <div className="space-y-3 max-h-96 overflow-y-auto">
+        {pastTranscriptions.length === 0 ? <p className="text-gray-500 text-center py-4">No past transcriptions found</p> : pastTranscriptions.map((transcript) => (
+          <div key={transcript.id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 cursor-pointer" onClick={() => loadPastTranscription(transcript.id)}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium text-gray-800">{getLanguageDisplay(transcript.language_code)} Transcription</p>
+                <p className="text-sm text-gray-600">{formatDate(transcript.created)}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-sm text-gray-600">Duration: {formatTime(transcript.audio_duration || 0)}</p>
+                <p className="text-sm">
+                  <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${transcript.status === 'completed' ? 'bg-green-100 text-green-800' : transcript.status === 'error' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                    {transcript.status === 'completed' && <CheckCircle className="w-3 h-3" />}
+                    {transcript.status === 'error' && <AlertCircle className="w-3 h-3" />}
+                    {transcript.status}
+                  </span>
+                </p>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    )}
+  </div>
+);
 
 export default AssemblyAITranscription;
