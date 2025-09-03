@@ -29,8 +29,6 @@ const AssemblyAITranscription = () => {
   const [apiKeyInput, setApiKeyInput] = useState('');
   
   const [driveFile, setDriveFile] = useState(null);
-  const [drivePermissionId, setDrivePermissionId] = useState(null);
-
 
   useEffect(() => {
     if (session) {
@@ -57,10 +55,13 @@ const AssemblyAITranscription = () => {
     setPastTranscriptions([]);
   };
 
+  // --- START: GECORRIGEERDE GOOGLE PICKER LOGICA ---
   const handleChooseFromDrive = () => {
     const developerKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
-    if (!session?.accessToken || !developerKey) {
-      setError('Google-authenticatie is niet correct geconfigureerd.');
+    const appId = process.env.NEXT_PUBLIC_GOOGLE_APP_ID; // Gebruik de nieuwe environment variable
+
+    if (!session?.accessToken || !developerKey || !appId) {
+      setError('Google-authenticatie is niet correct geconfigureerd. Controleer alle environment variables.');
       return;
     }
 
@@ -74,29 +75,42 @@ const AssemblyAITranscription = () => {
     };
 
     const createPicker = () => {
-      const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
-        .setIncludeFolders(false)
-        .setMimeTypes("audio/*,video/*");
+      try {
+        const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+          .setIncludeFolders(false)
+          .setMimeTypes("audio/*,video/*");
 
-      const picker = new google.picker.PickerBuilder()
-        .addView(view)
-        .setOAuthToken(session.accessToken)
-        .setDeveloperKey(developerKey)
-        .setCallback(pickerCallback)
-        .build();
-      picker.setVisible(true);
+        const picker = new google.picker.PickerBuilder()
+          .setAppId(appId)
+          .addView(view)
+          .setOAuthToken(session.accessToken)
+          .setDeveloperKey(developerKey)
+          .setCallback(pickerCallback)
+          .setOrigin(window.location.protocol + '//' + window.location.host) // Essentiële toevoeging
+          .build();
+        picker.setVisible(true);
+      } catch (error) {
+        console.error('Error creating picker:', error);
+        setError('Fout bij het maken van de Google Picker.');
+      }
     };
     
-    gapi.load('picker', { callback: createPicker });
+    // Laad 'client' samen met 'picker' om de benodigde initialisatie te doen
+    gapi.load('picker', createPicker);
   };
   
   useEffect(() => {
-    const script = document.createElement('script');
-    script.src = 'https://apis.google.com/js/api.js';
-    script.async = true;
-    script.defer = true;
-    document.body.appendChild(script);
+    // Zorg ervoor dat het Google API-script slechts één keer wordt geladen
+    if (!document.querySelector('script[src="https://apis.google.com/js/api.js"]')) {
+      const script = document.createElement('script');
+      script.src = 'https://apis.google.com/js/api.js';
+      script.async = true;
+      script.defer = true;
+      script.onload = () => gapi.load('client', () => {}); // Laad de basis client-bibliotheek
+      document.body.appendChild(script);
+    }
   }, []);
+  // --- EINDE: GECORRIGEERDE GOOGLE PICKER LOGICA ---
 
   const getLanguageDisplay = (languageCode) => {
     try {
@@ -199,7 +213,7 @@ const AssemblyAITranscription = () => {
         const { publicUrl, permissionId } = await response.json();
         
         finalAudioUrl = publicUrl;
-        localPermissionId = permissionId; // Gebruik lokale variabele binnen de functie
+        localPermissionId = permissionId;
   
       }
       
@@ -217,7 +231,6 @@ const AssemblyAITranscription = () => {
       setError(`Transcription process error: ${err.message}`);
       setTranscriptionStatus('idle');
     } finally {
-      // --- DEFINITIEVE LOGICA OM BESTAND WEER PRIVÉ TE MAKEN ---
       if (localDriveFile && localPermissionId) {
         console.log(`Revoking permission ${localPermissionId} for file ${localDriveFile.id}`);
         try {
@@ -233,9 +246,7 @@ const AssemblyAITranscription = () => {
           console.error('CRITICAL: Failed to revoke file permission:', revokeError);
           setError('Transcription finished, but failed to make the Google Drive file private again. Please check the file permissions manually.');
         }
-        // Reset de state
         setDriveFile(null);
-        setDrivePermissionId(null);
       }
     }
   };
