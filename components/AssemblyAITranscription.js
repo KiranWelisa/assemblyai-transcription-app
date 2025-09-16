@@ -45,11 +45,9 @@ const AssemblyAITranscription = () => {
     setPastTranscriptions([]);
   };
 
-  // --- Google Picker Logic ---
+  // --- Reverted Google Picker Logic ---
   useEffect(() => {
-    // Prevent script from being loaded multiple times
     if (document.querySelector('script#google-api-script')) {
-      pickerLoadedRef.current = true;
       return;
     }
 
@@ -60,11 +58,12 @@ const AssemblyAITranscription = () => {
     script.defer = true;
     
     script.onload = () => {
+      console.log('Google API script loaded successfully');
       if (window.gapi) {
         window.gapi.load('picker', {
           callback: () => {
-              console.log('Google Picker library loaded.');
-              pickerLoadedRef.current = true;
+            console.log('Google Picker library preloaded');
+            pickerLoadedRef.current = true;
           },
           onerror: () => console.error('Failed to load Google Picker library')
         });
@@ -77,65 +76,81 @@ const AssemblyAITranscription = () => {
     
     return () => {
       const scriptEl = document.querySelector('script#google-api-script');
-      if (scriptEl) scriptEl.remove();
+      if (scriptEl) {
+        scriptEl.remove();
+      }
     };
   }, []);
-  
+
   const handleChooseFromDrive = async () => {
     const developerKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    const appId = process.env.NEXT_PUBLIC_GOOGLE_APP_ID;
 
     if (!session?.accessToken) {
-      setError('You are not logged in. Please log in with Google first.');
+      setError('Je bent niet ingelogd. Log eerst in met Google.');
       return;
     }
     
-    if (!developerKey) {
-      setError('Google Picker API key is missing. Please check your environment variables.');
+    if (!developerKey || !clientId || !appId) {
+      setError('Google configuratie ontbreekt. Controleer environment variabelen.');
       return;
     }
     
-    if (session.error === "RefreshAccessTokenError") {
-      setError('Your session has expired. Please sign in again.');
+    if (session.error === "AccessTokenExpired") {
+      setError('Je sessie is verlopen. Log opnieuw in.');
       signOut();
       return;
     }
     
     if (!window.gapi || !pickerLoadedRef.current) {
-      setError('Google API is still loading. Please try again in a few seconds.');
+      setError('Google API wordt nog geladen. Probeer het over een paar seconden opnieuw.');
       return;
     }
     
     const pickerCallback = (data) => {
       if (data[google.picker.Response.ACTION] === google.picker.Action.PICKED) {
         const doc = data[google.picker.Response.DOCUMENTS][0];
-        setDriveFile({ id: doc.id, name: doc.name });
-        setAudioUrl(''); // Clear URL input when a file is chosen
+        console.log('Selected file:', doc);
+        setDriveFile({ id: doc.id, name: doc.name, mimeType: doc.mimeType });
+        setAudioUrl('');
         setError(null);
+      } else if (data[google.picker.Response.ACTION] === google.picker.Action.CANCEL) {
+        console.log('Picker cancelled by user');
       }
     };
     
-    try {
-        // Create a general view of all files and an upload view.
-        const docsView = new google.picker.DocsView()
-            .setIncludeFolders(true)
-            .setSelectFolderEnabled(false);
-            
-        const uploadView = new google.picker.DocsUploadView();
-
+    const createAndShowPicker = () => {
+      try {
+        console.log('Creating picker with:', { appId, hasToken: !!session.accessToken, hasDeveloperKey: !!developerKey });
+        
+        const audioView = new google.picker.DocsView().setIncludeFolders(false).setSelectFolderEnabled(false).setMimeTypes('audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/webm,audio/aac,audio/flac,audio/x-m4a');
+        const videoView = new google.picker.DocsView().setIncludeFolders(false).setSelectFolderEnabled(false).setMimeTypes('video/mp4,video/webm,video/ogg,video/mov,video/avi,video/wmv,video/flv,video/mkv');
+        
         const picker = new google.picker.PickerBuilder()
+          .setAppId(appId)
           .setOAuthToken(session.accessToken)
           .setDeveloperKey(developerKey)
-          .addView(docsView) // Add the general documents view
-          .addView(uploadView) // Add the upload view
+          .addView(audioView)
+          .addView(videoView)
+          .addView(new google.picker.DocsUploadView())
           .setCallback(pickerCallback)
-          .setTitle('Select a media file or upload a new one')
+          .setTitle('Selecteer een audio of video bestand')
+          .setOrigin(window.location.protocol + '//' + window.location.host)
+          .setMaxItems(1)
           .build();
+          
         picker.setVisible(true);
-    } catch (err) {
-      console.error('Error creating Google Picker:', err);
-      setError('Failed to open Google Picker: ' + err.message);
-    }
+      } catch (error) {
+        console.error('Error creating picker:', error);
+        setError('Er ging iets mis bij het openen van de Google Picker: ' + error.message);
+      }
+    };
+    
+    createAndShowPicker();
   };
+  // --- END Reverted Google Picker Logic ---
+
 
   // --- Transcription Logic ---
   const pollTranscriptionStatus = async (transcriptId) => {
