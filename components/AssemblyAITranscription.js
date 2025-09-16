@@ -115,12 +115,20 @@ const AssemblyAITranscription = () => {
     };
     
     try {
+        // Create a general view of all files and an upload view.
+        const docsView = new google.picker.DocsView()
+            .setIncludeFolders(true)
+            .setSelectFolderEnabled(false);
+            
+        const uploadView = new google.picker.DocsUploadView();
+
         const picker = new google.picker.PickerBuilder()
           .setOAuthToken(session.accessToken)
           .setDeveloperKey(developerKey)
-          .addView(google.picker.ViewId.DOCS_VIDEOS) // Simplified view for audio/video
+          .addView(docsView) // Add the general documents view
+          .addView(uploadView) // Add the upload view
           .setCallback(pickerCallback)
-          .setTitle('Select an audio or video file')
+          .setTitle('Select a media file or upload a new one')
           .build();
         picker.setVisible(true);
     } catch (err) {
