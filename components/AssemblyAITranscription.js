@@ -419,7 +419,11 @@ const AssemblyAITranscription = () => {
                                 onClick={handleChooseFromDrive}
                                 className="w-full bg-white border-2 border-gray-300 text-gray-700 py-3 px-4 rounded-lg hover:bg-gray-100 transition-colors flex items-center justify-center gap-2"
                             >
-                                <svg className="w-6 h-6" viewBox="0 0 512 512"><path fill="#fbc02d" d="M313 118l-42 73-85 147.5L144 256h224l-55-98z"/><path fill="#4caf50" d="M144 256l85 147.5L271 496h141L144 256z"/><path fill="#2196f3" d="M412 496L271 256 144 256 0 496z"/><path fill="#fbc02d" d="M144 256L0 0h144z"/><path fill="#4caf50" d="M144 0h142l-42 73-85-73z"/><path fill="#2196f3" d="M286 0h141l-85 148-42-73z"/></svg>
+                                <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M7.75 22.5L1.5 12L7.75 1.5H20.5L24 7.5L17.75 18L13.75 11.25L7.75 22.5Z" fill="#2684FC"/>
+                                    <path d="M1.5 12L4.625 17.25L10.875 6.75L7.75 1.5L1.5 12Z" fill="#00A85D"/>
+                                    <path d="M20.5 1.5L13.75 11.25L17.75 18L24 7.5L20.5 1.5Z" fill="#FFC107"/>
+                                </svg>
                                 Choose from Google Drive
                             </button>
                         </>
