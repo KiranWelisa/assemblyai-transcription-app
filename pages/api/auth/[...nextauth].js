@@ -1,9 +1,7 @@
-// pages/api/auth/[...nextauth].js
-
 import NextAuth from 'next-auth';
 import GoogleProvider from 'next-auth/providers/google';
 
-// Function to refresh the access token
+// Functie om de access token te vernieuwen
 async function refreshAccessToken(token) {
   try {
     const url = "https://oauth2.googleapis.com/token";
@@ -30,7 +28,7 @@ async function refreshAccessToken(token) {
       ...token,
       accessToken: refreshedTokens.access_token,
       expiresAt: Math.floor(Date.now() / 1000 + refreshedTokens.expires_in),
-      refreshToken: refreshedTokens.refresh_token ?? token.refreshToken, // Fall back to old refresh token
+      refreshToken: refreshedTokens.refresh_token ?? token.refreshToken, // Val terug op de oude refresh token
     };
   } catch (error) {
     console.error("Error refreshing access token", error);
@@ -51,7 +49,8 @@ export default NextAuth({
           prompt: "consent",
           access_type: "offline",
           response_type: "code",
-          scope: "https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive.readonly",
+          // BELANGRIJK: Hersteld naar de correcte scope die permissies toestaat
+          scope: "https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/drive.file",
         },
       },
     }),
@@ -59,7 +58,7 @@ export default NextAuth({
   secret: process.env.NEXTAUTH_SECRET,
   callbacks: {
     async jwt({ token, account }) {
-      // Initial sign in
+      // Initiele login
       if (account) {
         token.accessToken = account.access_token;
         token.refreshToken = account.refresh_token;
@@ -67,12 +66,12 @@ export default NextAuth({
         return token;
       }
 
-      // Return previous token if the access token has not expired yet
+      // Token is nog geldig
       if (Date.now() < token.expiresAt * 1000) {
         return token;
       }
 
-      // Access token has expired, try to update it
+      // Token is verlopen, vernieuw het
       console.log("Access token expired, refreshing...");
       return refreshAccessToken(token);
     },
