@@ -1,3 +1,4 @@
+// components/AssemblyAITranscription.js
 import React, { useState, useEffect, useRef } from 'react';
 import { Upload, Link, Loader2, User, ChevronDown, ChevronUp, CheckCircle, AlertCircle, Key, X, File, Copy, ClipboardCheck } from 'lucide-react';
 import { useSession, signIn, signOut } from 'next-auth/react';
@@ -19,7 +20,6 @@ const AssemblyAITranscription = () => {
   const [driveFile, setDriveFile] = useState(null);
   const pickerLoadedRef = useRef(false);
 
-  // Load API key from local storage on session change
   useEffect(() => {
     if (session) {
       const storedKey = localStorage.getItem('assemblyai_api_key');
@@ -45,7 +45,7 @@ const AssemblyAITranscription = () => {
     setPastTranscriptions([]);
   };
 
-  // --- Reverted Google Picker Logic ---
+  // --- Oorspronkelijke Google Picker Logic ---
   useEffect(() => {
     if (document.querySelector('script#google-api-script')) {
       return;
@@ -149,35 +149,27 @@ const AssemblyAITranscription = () => {
     
     createAndShowPicker();
   };
-  // --- END Reverted Google Picker Logic ---
-
-
-  // --- Transcription Logic ---
+  
   const pollTranscriptionStatus = async (transcriptId) => {
     if (!apiKey) return;
 
-    const poll = async (resolve, reject) => {
-        try {
-            const response = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
-                headers: { 'Authorization': apiKey }
-            });
-            if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
-            
-            const transcript = await response.json();
-            setStatusMessage(`Status: ${transcript.status}`);
-
-            if (transcript.status === 'completed') {
-                resolve(transcript);
-            } else if (transcript.status === 'error') {
-                reject(new Error(transcript.error || 'Transcription failed'));
-            } else {
-                setTimeout(() => poll(resolve, reject), 5000); // Poll every 5 seconds
-            }
-        } catch (err) {
-            reject(err);
+    for (let i = 0; i < 200; i++) {
+        setStatusMessage(`Polling for status... Attempt ${i + 1}`);
+        const response = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
+            headers: { 'Authorization': apiKey }
+        });
+        if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
+        
+        const transcript = await response.json();
+        if (transcript.status === 'completed') {
+            return transcript;
         }
-    };
-    return new Promise(poll);
+        if (transcript.status === 'error') {
+            throw new Error(transcript.error || 'Transcription failed');
+        }
+        await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+    throw new Error("Transcription timed out.");
   };
   
   const startTranscription = async () => {
@@ -186,21 +178,19 @@ const AssemblyAITranscription = () => {
     setError(null);
     setCurrentTranscript(null);
     let finalAudioUrl = audioUrl;
-    let fileIdToMakePrivate = null;
-    let permissionIdToRevoke = null;
+    let localDriveFile = driveFile;
+    let localPermissionId = null;
 
-    // Set the title for the transcript display
     setTranscriptionTitle(driveFile ? driveFile.name : audioUrl.split('/').pop());
 
     try {
-        // Step 1: Prepare audio URL (make GDrive file public if needed)
-        if (driveFile) {
+        if (localDriveFile) {
             setTranscriptionStatus('publishing');
             setStatusMessage('Preparing file from Google Drive...');
             const response = await fetch('/api/drive/make-public', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ fileId: driveFile.id }),
+                body: JSON.stringify({ fileId: localDriveFile.id }),
             });
             if (!response.ok) {
                 const errorData = await response.json();
@@ -208,15 +198,13 @@ const AssemblyAITranscription = () => {
             }
             const { publicUrl, permissionId } = await response.json();
             finalAudioUrl = publicUrl;
-            fileIdToMakePrivate = driveFile.id;
-            permissionIdToRevoke = permissionId;
+            localPermissionId = permissionId;
         }
 
         if (!finalAudioUrl) {
             return setError('Please provide a URL or select a file from Google Drive.');
         }
 
-        // Step 2: Create transcription job
         setTranscriptionStatus('transcribing');
         setStatusMessage('Sending file to AssemblyAI for transcription...');
         const createResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
@@ -230,12 +218,9 @@ const AssemblyAITranscription = () => {
         }
         const newTranscript = await createResponse.json();
 
-        // Step 3: Poll for completion
         setTranscriptionStatus('polling');
-        setStatusMessage('Transcription in progress...');
         const completedTranscript = await pollTranscriptionStatus(newTranscript.id);
 
-        // Step 4: Success! Update UI
         setCurrentTranscript(completedTranscript);
         setTranscriptionStatus('completed');
         setStatusMessage('Transcription complete!');
@@ -247,13 +232,12 @@ const AssemblyAITranscription = () => {
         setTranscriptionStatus('error');
         setStatusMessage('An error occurred during transcription.');
     } finally {
-        // Final step: Make Google Drive file private again
-        if (fileIdToMakePrivate && permissionIdToRevoke) {
+        if (localDriveFile && localPermissionId) {
             try {
                 await fetch('/api/drive/make-private', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ fileId: fileIdToMakePrivate, permissionId: permissionIdToRevoke }),
+                    body: JSON.stringify({ fileId: localDriveFile.id, permissionId: localPermissionId }),
                 });
             } catch (revokeError) {
                 console.error('CRITICAL: Failed to revoke file permission:', revokeError);
@@ -419,11 +403,7 @@ const AssemblyAITranscription = () => {
                                 onClick={handleChooseFromDrive}
                                 className="w-full bg-white border-2 border-gray-300 text-gray-700 py-3 px-4 rounded-lg hover:bg-gray-100 transition-colors flex items-center justify-center gap-2"
                             >
-                                <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                    <path d="M7.75 22.5L1.5 12L7.75 1.5H20.5L24 7.5L17.75 18L13.75 11.25L7.75 22.5Z" fill="#2684FC"/>
-                                    <path d="M1.5 12L4.625 17.25L10.875 6.75L7.75 1.5L1.5 12Z" fill="#00A85D"/>
-                                    <path d="M20.5 1.5L13.75 11.25L17.75 18L24 7.5L20.5 1.5Z" fill="#FFC107"/>
-                                </svg>
+                               <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7.75 22.5L1.5 12L7.75 1.5H20.5L24 7.5L17.75 18L13.75 11.25L7.75 22.5Z" fill="#2684FC"></path><path d="M1.5 12L4.625 17.25L10.875 6.75L7.75 1.5L1.5 12Z" fill="#00A85D"></path><path d="M20.5 1.5L13.75 11.25L17.75 18L24 7.5L20.5 1.5Z" fill="#FFC107"></path></svg>
                                 Choose from Google Drive
                             </button>
                         </>
