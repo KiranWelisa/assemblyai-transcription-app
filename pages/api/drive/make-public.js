@@ -1,15 +1,12 @@
 import { getToken } from 'next-auth/jwt';
 
 export default async function handler(req, res) {
-  // 1. Accepteer alleen POST-verzoeken
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // 2. Haal de beveiligde token op met de sessie-informatie
   const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
 
-  // 3. Valideer de gebruiker en het toegangstoken
   if (!token || !token.accessToken) {
     return res.status(401).json({ error: 'Unauthorized: No valid session found.' });
   }
@@ -23,7 +20,23 @@ export default async function handler(req, res) {
   const driveApiUrl = `https://www.googleapis.com/drive/v3/files/${fileId}`;
 
   try {
-    // 4. Maak een permissie aan die het bestand leesbaar maakt voor iedereen met de link
+    // Stap 1: Haal bestandsinformatie op om de grootte te controleren
+    const fileInfoResponse = await fetch(`${driveApiUrl}?fields=size,name,webContentLink`, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!fileInfoResponse.ok) {
+      throw new Error('Failed to get file information.');
+    }
+
+    const fileInfo = await fileInfoResponse.json();
+    const fileSizeInMB = parseInt(fileInfo.size) / (1024 * 1024);
+    
+    console.log(`File: ${fileInfo.name}, Size: ${fileSizeInMB.toFixed(2)} MB`);
+
+    // Stap 2: Maak het bestand publiek toegankelijk
     const permissionResponse = await fetch(`${driveApiUrl}/permissions`, {
       method: 'POST',
       headers: {
@@ -45,16 +58,31 @@ export default async function handler(req, res) {
     const permissionResult = await permissionResponse.json();
     const permissionId = permissionResult.id;
 
-    // **DE CORRECTIE:** Genereer een directe downloadlink die de virus-scan waarschuwing overslaat.
-    const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+    // Stap 3: Voor grote bestanden, gebruik webContentLink (vereist authenticatie)
+    // Voor kleine bestanden, gebruik directe download URL
+    let downloadUrl;
     
-    // Log de gegenereerde URL op de server om te debuggen
-    console.log(`Generated direct download URL for file ${fileId}: ${downloadUrl}`);
+    if (fileSizeInMB > 100) {
+      // OPLOSSING 1: Gebruik een alternatieve API URL voor grote bestanden
+      // Deze werkt beter voor audio/video bestanden
+      downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${process.env.NEXT_PUBLIC_GOOGLE_API_KEY}`;
+      
+      // OPLOSSING 2 (alternatief): Als bovenstaande niet werkt, probeer deze:
+      // downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`;
+      
+      console.log(`Large file detected (${fileSizeInMB.toFixed(2)} MB), using alternative download URL`);
+    } else {
+      // Voor kleine bestanden, gebruik de standaard methode
+      downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+    }
+    
+    console.log(`Generated download URL for file ${fileId}: ${downloadUrl}`);
 
-    // 5. Stuur de publieke URL en de permissie-ID terug naar de frontend
     res.status(200).json({
       publicUrl: downloadUrl,
       permissionId: permissionId,
+      fileSize: fileSizeInMB,
+      fileName: fileInfo.name
     });
 
   } catch (error) {
