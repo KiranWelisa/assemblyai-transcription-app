@@ -47,15 +47,18 @@ export default async function handler(req, res) {
 
     // **DE CORRECTIE:** Genereer een directe downloadlink die de virus-scan waarschuwing overslaat.
     const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+    
+    // Log de gegenereerde URL op de server om te debuggen
+    console.log(`Generated direct download URL for file ${fileId}: ${downloadUrl}`);
 
-    // 6. Stuur de publieke URL en de permissie-ID terug naar de frontend
+    // 5. Stuur de publieke URL en de permissie-ID terug naar de frontend
     res.status(200).json({
       publicUrl: downloadUrl,
       permissionId: permissionId,
     });
 
   } catch (error) {
-    console.error('Server-side error:', error);
+    console.error('Server-side error in make-public:', error);
     res.status(500).json({ error: error.message || 'An internal server error occurred.' });
   }
 }
