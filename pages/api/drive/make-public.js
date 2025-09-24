@@ -43,30 +43,15 @@ export default async function handler(req, res) {
     }
 
     const permissionResult = await permissionResponse.json();
-    const permissionId = permissionResult.id; // Belangrijk om deze op te slaan!
+    const permissionId = permissionResult.id;
 
-    // 5. Haal de metadata van het bestand op, inclusief de downloadlink
-    const fileMetadataResponse = await fetch(`${driveApiUrl}?fields=webContentLink,webViewLink`, {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-      },
-    });
-
-    if (!fileMetadataResponse.ok) {
-      const errorData = await fileMetadataResponse.json();
-      console.error('Google Drive API Metadata Error:', errorData);
-      throw new Error('Failed to get file metadata.');
-    }
-
-    const fileMetadata = await fileMetadataResponse.json();
-    
-    // De webContentLink is de directe downloadlink die AssemblyAI nodig heeft
-    const downloadUrl = fileMetadata.webContentLink;
+    // **DE CORRECTIE:** Genereer een directe downloadlink die de virus-scan waarschuwing overslaat.
+    const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
 
     // 6. Stuur de publieke URL en de permissie-ID terug naar de frontend
     res.status(200).json({
       publicUrl: downloadUrl,
-      permissionId: permissionId, // We hebben deze ID later nodig om de toegang weer in te trekken
+      permissionId: permissionId,
     });
 
   } catch (error) {
