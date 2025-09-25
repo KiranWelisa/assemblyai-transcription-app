@@ -124,7 +124,7 @@ const AssemblyAITranscription = () => {
       try {
         console.log('Creating picker with:', { appId, hasToken: !!session.accessToken, hasDeveloperKey: !!developerKey });
         
-        const audioView = new google.picker.DocsView().setIncludeFolders(false).setSelectFolderEnabled(false).setMimeTypes('audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/webm,audio/aac,audio/flac,audio/x-m4a');
+        const audioView = new google.picker.DocsView().setIncludeFolders(false).setSelectFolderEnabled(false).setMimeTypes('audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/ogg,audio/webm,audio/aac,audio/flac,audio/x-m4a');
         const videoView = new google.picker.DocsView().setIncludeFolders(false).setSelectFolderEnabled(false).setMimeTypes('video/mp4,video/webm,video/ogg,video/mov,video/avi,video/wmv,video/flv,video/mkv');
         
         const picker = new google.picker.PickerBuilder()
