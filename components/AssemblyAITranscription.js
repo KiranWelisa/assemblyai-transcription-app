@@ -1,31 +1,60 @@
 // components/AssemblyAITranscription.js
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Link, Loader2, User, ChevronDown, ChevronUp, CheckCircle, AlertCircle, Key, X, File, Copy, ClipboardCheck, ExternalLink, Sparkles } from 'lucide-react';
+import { Upload, Link, Loader2, User, X, File, Copy, Check, Download, Settings, Moon, Sun, Search, SlidersHorizontal, Tag as TagIcon, Plus, Sparkles, RefreshCw, ChevronDown, Filter } from 'lucide-react';
 import { useSession, signIn, signOut } from 'next-auth/react';
 
 const AssemblyAITranscription = () => {
   const { data: session, status, update } = useSession();
 
-  // State variables
+  // State
+  const [darkMode, setDarkMode] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [selectedTranscript, setSelectedTranscript] = useState(null);
   const [audioUrl, setAudioUrl] = useState('');
   const [transcriptionStatus, setTranscriptionStatus] = useState('idle');
-  const [statusMessage, setStatusMessage] = useState('Ready to transcribe.');
+  const [statusMessage, setStatusMessage] = useState('');
   const [currentTranscript, setCurrentTranscript] = useState(null);
   const [currentTranscriptionId, setCurrentTranscriptionId] = useState(null);
   const [transcriptionTitle, setTranscriptionTitle] = useState('');
   const [titleGenerating, setTitleGenerating] = useState(false);
   const [pastTranscriptions, setPastTranscriptions] = useState([]);
-  const [showPastTranscriptions, setShowPastTranscriptions] = useState(true);
   const [error, setError] = useState(null);
   const [apiKey, setApiKey] = useState('');
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [driveFile, setDriveFile] = useState(null);
-  const [oneTapInitialized, setOneTapInitialized] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState('date');
+  const [filterTag, setFilterTag] = useState(null);
+  const [allTags, setAllTags] = useState([]);
+  const [syncing, setSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState({ synced: 0, total: 0 });
+  const [copied, setCopied] = useState(false);
+  
   const pickerLoadedRef = useRef(false);
   const oneTapRef = useRef(false);
   const titlePollingRef = useRef(null);
 
-  // Load API key from localStorage when session exists
+  // Dark mode
+  useEffect(() => {
+    const isDark = localStorage.getItem('darkMode') === 'true' || 
+      (!localStorage.getItem('darkMode') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    setDarkMode(isDark);
+    if (isDark) document.documentElement.classList.add('dark');
+  }, []);
+
+  const toggleDarkMode = () => {
+    const newMode = !darkMode;
+    setDarkMode(newMode);
+    localStorage.setItem('darkMode', newMode);
+    if (newMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  };
+
+  // Load API key
   useEffect(() => {
     if (session) {
       const storedKey = localStorage.getItem('assemblyai_api_key');
@@ -36,25 +65,19 @@ const AssemblyAITranscription = () => {
     }
   }, [session]);
 
-  // Session monitoring for automatic token refresh
+  // Session refresh
   useEffect(() => {
     if (!session) return;
-
-    const checkSession = async () => {
-      await update();
-    };
-
-    const interval = setInterval(checkSession, 5 * 60 * 1000);
+    const interval = setInterval(() => update(), 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [session, update]);
 
-  // Initialize Google One Tap
+  // Google One Tap
   useEffect(() => {
-    if (status === 'loading' || status === 'authenticated' || oneTapInitialized || oneTapRef.current) return;
+    if (status === 'loading' || status === 'authenticated' || oneTapRef.current) return;
 
     const initializeOneTap = () => {
       if (!window.google?.accounts?.id) return;
-
       try {
         window.google.accounts.id.initialize({
           client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
@@ -62,10 +85,8 @@ const AssemblyAITranscription = () => {
           auto_select: false,
           cancel_on_tap_outside: true,
         });
-
         window.google.accounts.id.prompt();
         oneTapRef.current = true;
-        setOneTapInitialized(true);
       } catch (error) {
         console.error('Error initializing One Tap:', error);
       }
@@ -80,24 +101,16 @@ const AssemblyAITranscription = () => {
           initializeOneTap();
         }
       }, 100);
-
       setTimeout(() => clearInterval(checkInterval), 5000);
       return () => clearInterval(checkInterval);
     }
-  }, [status, oneTapInitialized]);
+  }, [status]);
 
   const handleOneTapCallback = async (response) => {
     try {
-      const result = await signIn('google', {
-        redirect: false,
-        credential: response.credential,
-      });
-
-      if (result?.error) {
-        setError('Login failed. Please try again.');
-      }
+      const result = await signIn('google', { redirect: false, credential: response.credential });
+      if (result?.error) setError('Login failed. Please try again.');
     } catch (error) {
-      console.error('One Tap callback error:', error);
       setError('An error occurred during login.');
     }
   };
@@ -116,6 +129,7 @@ const AssemblyAITranscription = () => {
       setApiKey(apiKeyInput);
       setApiKeyInput('');
       fetchPastTranscriptions();
+      setShowSettings(false);
     }
   };
 
@@ -125,16 +139,14 @@ const AssemblyAITranscription = () => {
     setPastTranscriptions([]);
   };
 
-  // Google Picker initialization
+  // Google Picker
   useEffect(() => {
     if (document.querySelector('script#google-api-script')) return;
-
     const script = document.createElement('script');
     script.id = 'google-api-script';
     script.src = 'https://apis.google.com/js/api.js';
     script.async = true;
     script.defer = true;
-    
     script.onload = () => {
       if (window.gapi) {
         window.gapi.load('picker', {
@@ -143,9 +155,7 @@ const AssemblyAITranscription = () => {
         });
       }
     };
-    
     document.head.appendChild(script);
-    
     return () => {
       const scriptEl = document.querySelector('script#google-api-script');
       if (scriptEl) scriptEl.remove();
@@ -161,12 +171,10 @@ const AssemblyAITranscription = () => {
       setError('Je bent niet ingelogd. Log eerst in met Google.');
       return;
     }
-    
     if (!developerKey || !clientId || !appId) {
       setError('Google configuratie ontbreekt.');
       return;
     }
-    
     if (!window.gapi || !pickerLoadedRef.current) {
       setError('Google API wordt nog geladen.');
       return;
@@ -203,55 +211,72 @@ const AssemblyAITranscription = () => {
       setError('Er ging iets mis bij het openen van de Google Picker.');
     }
   };
-  
+
+  // Sync from AssemblyAI
+  const handleSync = async () => {
+    if (!apiKey || syncing) return;
+    
+    setSyncing(true);
+    setSyncProgress({ synced: 0, total: 0 });
+    
+    try {
+      const response = await fetch('/api/transcriptions/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assemblyAiKey: apiKey }),
+      });
+
+      if (!response.ok) throw new Error('Sync failed');
+
+      const data = await response.json();
+      setSyncProgress({ synced: data.synced, total: data.total });
+      
+      // Refresh transcriptions
+      await fetchPastTranscriptions();
+      
+      setTimeout(() => setSyncing(false), 2000);
+    } catch (error) {
+      console.error('Sync error:', error);
+      setError('Failed to sync transcriptions');
+      setSyncing(false);
+    }
+  };
+
   const pollTranscriptionStatus = async (transcriptId) => {
     if (!apiKey) return;
-
     for (let i = 0; i < 200; i++) {
       setStatusMessage(`Polling for status... Attempt ${i + 1}`);
       const response = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
         headers: { 'Authorization': apiKey }
       });
       if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
-      
       const transcript = await response.json();
       if (transcript.status === 'completed') return transcript;
       if (transcript.status === 'error') throw new Error(transcript.error || 'Transcription failed');
-      
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
     throw new Error("Transcription timed out.");
   };
 
-  // Poll for title generation completion
   const startTitlePolling = (transcriptionId) => {
-    if (titlePollingRef.current) {
-      clearInterval(titlePollingRef.current);
-    }
-
+    if (titlePollingRef.current) clearInterval(titlePollingRef.current);
     titlePollingRef.current = setInterval(async () => {
       try {
         const response = await fetch('/api/transcriptions');
         if (!response.ok) return;
-        
         const data = await response.json();
         const updated = data.transcriptions.find(t => t.id === transcriptionId);
-        
         if (updated && !updated.titleGenerating) {
           setTranscriptionTitle(updated.title || 'Untitled Transcription');
           setTitleGenerating(false);
           clearInterval(titlePollingRef.current);
           titlePollingRef.current = null;
-          
-          // Refresh past transcriptions list
           fetchPastTranscriptions();
         }
       } catch (error) {
         console.error('Error polling for title:', error);
       }
-    }, 2000); // Poll every 2 seconds
-
-    // Stop polling after 30 seconds
+    }, 2000);
     setTimeout(() => {
       if (titlePollingRef.current) {
         clearInterval(titlePollingRef.current);
@@ -261,25 +286,20 @@ const AssemblyAITranscription = () => {
     }, 30000);
   };
 
-  // Cleanup polling on unmount
   useEffect(() => {
     return () => {
-      if (titlePollingRef.current) {
-        clearInterval(titlePollingRef.current);
-      }
+      if (titlePollingRef.current) clearInterval(titlePollingRef.current);
     };
   }, []);
-  
+
   const startTranscription = async () => {
     if (!apiKey) return setError('Please provide your AssemblyAI API key.');
-    
     setError(null);
     setCurrentTranscript(null);
     setCurrentTranscriptionId(null);
     let finalAudioUrl = audioUrl;
     let localDriveFile = driveFile;
     let localPermissionId = null;
-
     const fileName = driveFile ? driveFile.name : audioUrl.split('/').pop();
 
     try {
@@ -300,9 +320,7 @@ const AssemblyAITranscription = () => {
         localPermissionId = permissionId;
       }
 
-      if (!finalAudioUrl) {
-        return setError('Please provide a URL or select a file from Google Drive.');
-      }
+      if (!finalAudioUrl) return setError('Please provide a URL or select a file from Google Drive.');
 
       setTranscriptionStatus('transcribing');
       setStatusMessage('Sending file to AssemblyAI for transcription...');
@@ -344,22 +362,17 @@ const AssemblyAITranscription = () => {
           setTranscriptionTitle('Generating title...');
           setTitleGenerating(true);
 
-          // Start async title generation
           fetch('/api/transcriptions/generate-title', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              transcriptionId: transcription.id,
-              transcript: completedTranscript,
-            }),
+            body: JSON.stringify({ transcriptionId: transcription.id, transcript: completedTranscript }),
           });
 
-          // Start polling for title
           startTitlePolling(transcription.id);
+          fetchPastTranscriptions();
         }
       } catch (dbError) {
         console.error('Error saving to database:', dbError);
-        // Continue anyway, transcript is still shown
       }
 
     } catch (err) {
@@ -389,39 +402,31 @@ const AssemblyAITranscription = () => {
       if (!response.ok) return;
       const data = await response.json();
       setPastTranscriptions(data.transcriptions || []);
+      
+      // Extract unique tags
+      const tags = new Set();
+      data.transcriptions.forEach(t => {
+        if (t.tags) t.tags.forEach(tag => tags.add(tag));
+        if (t.language) tags.add(getLanguageTag(t.language));
+      });
+      setAllTags(Array.from(tags));
     } catch (err) {
       console.error('Error fetching past transcriptions:', err);
     }
   };
 
-  const loadPastTranscription = async (transcription) => {
+  const loadTranscript = async (transcription) => {
     if (!apiKey) return;
-    
-    setTranscriptionStatus('loading');
-    setStatusMessage('Loading past transcript...');
-    setError(null);
     try {
       const response = await fetch(`https://api.assemblyai.com/v2/transcript/${transcription.assemblyAiId}`, {
         headers: { 'Authorization': apiKey }
       });
-      
       if (!response.ok) throw new Error('Failed to load transcript');
-      
       const transcript = await response.json();
-      setCurrentTranscript(transcript);
-      setCurrentTranscriptionId(transcription.id);
-      setTranscriptionTitle(transcription.title || 'Untitled Transcription');
-      setTitleGenerating(transcription.titleGenerating || false);
-      setTranscriptionStatus('completed');
-      setStatusMessage('Past transcript loaded.');
-
-      // If title is still generating, start polling
-      if (transcription.titleGenerating) {
-        startTitlePolling(transcription.id);
-      }
+      setSelectedTranscript({ ...transcription, fullTranscript: transcript });
+      setShowModal(true);
     } catch (err) {
       setError(`Error loading transcription: ${err.message}`);
-      setTranscriptionStatus('error');
     }
   };
 
@@ -434,297 +439,485 @@ const AssemblyAITranscription = () => {
   };
   
   const formatDate = (dateString) => new Date(dateString).toLocaleString('nl-NL', { 
-    day: 'numeric',
-    month: 'short', 
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
+    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
   });
   
-  const getLanguageDisplay = (code) => {
-    if (!code) return '🌐 Unknown';
-    if (String(code).toLowerCase().startsWith('nl')) return '🇳🇱 Dutch';
-    if (String(code).toLowerCase().startsWith('en')) return '🇬🇧 English';
-    return `🌐 ${code}`;
+  const getLanguageTag = (code) => {
+    if (!code) return 'Unknown';
+    if (String(code).toLowerCase().startsWith('nl')) return 'Dutch';
+    if (String(code).toLowerCase().startsWith('en')) return 'English';
+    return code;
   };
 
-  const isTranscriptionDisabled = (!audioUrl && !driveFile) || !['idle', 'completed', 'error'].includes(transcriptionStatus);
+  const getLanguageEmoji = (code) => {
+    if (!code) return '🌐';
+    if (String(code).toLowerCase().startsWith('nl')) return '🇳🇱';
+    if (String(code).toLowerCase().startsWith('en')) return '🇬🇧';
+    return '🌐';
+  };
 
-  return (
-    <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-      <div className="max-w-4xl mx-auto">
-        <header className="mb-8">
-          <h1 className="text-3xl md:text-4xl font-bold text-center mb-2">AssemblyAI Transcription Tool</h1>
-          <p className="text-center text-gray-600">Transcribe audio/video from a public link or your Google Drive.</p>
-        </header>
+  const getTranscriptPreview = (transcript) => {
+    if (!transcript?.fullTranscript?.utterances?.length) return '';
+    const text = transcript.fullTranscript.utterances
+      .slice(0, 3)
+      .map(u => u.text)
+      .join(' ');
+    return text.substring(0, 150);
+  };
 
-        {/* Authentication Status */}
-        {session ? (
-          <div className="bg-white rounded-lg shadow-lg p-4 mb-6 flex justify-between items-center">
-            <div className="flex items-center gap-3">
-              <img src={session.user.image} alt="User profile" className="w-10 h-10 rounded-full" />
-              <div>
-                <p className="font-medium text-sm sm:text-base">{session.user.name}</p>
-                <p className="text-xs sm:text-sm text-gray-500">{session.user.email}</p>
-              </div>
-            </div>
-            <button onClick={() => signOut()} className="text-sm text-red-600 hover:text-red-700 font-medium">
-              Log Out
-            </button>
-          </div>
-        ) : (
-          <div className="bg-white rounded-lg shadow-lg p-6 mb-6 text-center">
-            <h3 className="text-lg font-semibold mb-4">Welcome!</h3>
-            <p className="text-sm text-gray-600 mb-6">Log in with your Google account to get started.</p>
-            <button
-              onClick={handleGoogleSignIn}
-              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 mx-auto"
-            >
-              <svg className="w-5 h-5" aria-hidden="true" focusable="false" viewBox="0 0 488 512"><path fill="currentColor" d="M488 261.8C488 403.3 381.5 512 244 512 109.8 512 0 402.2 0 256S109.8 0 244 0c73.2 0 136 29.1 181.2 73.2L375 152.1C341.3 120.3 296.8 97.9 244 97.9c-88.3 0-159.9 71.6-159.9 159.9s71.6 159.9 159.9 159.9c102.4 0 133.4-85.1 136.9-123.9H244v-75.1h236.1c2.3 12.7 3.9 26.1 3.9 40.8z"></path></svg>
-              Sign in with Google
-            </button>
-          </div>
-        )}
-
-        {/* API Key Management */}
-        {session && !apiKey && (
-          <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-            <h3 className="text-lg font-semibold mb-2">Enter your AssemblyAI API Key</h3>
-            <p className="text-sm text-gray-600 mb-4">Your key is stored safely in your browser's local storage.</p>
-            
-            {/* Big Onboarding Button */}
-            <a
-              href="https://www.assemblyai.com/dashboard/signup"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block w-full mb-4 px-6 py-4 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all shadow-lg hover:shadow-xl"
-            >
-              <div className="flex items-center justify-center gap-3">
-                <Key className="w-6 h-6" />
-                <div className="text-left">
-                  <div className="font-semibold text-lg">Get Your Free API Key</div>
-                  <div className="text-sm text-blue-100">Sign up at AssemblyAI to get started</div>
-                </div>
-                <ExternalLink className="w-5 h-5 ml-auto" />
-              </div>
-            </a>
-
-            <div className="flex items-center gap-2">
-              <Key className="w-5 h-5 text-gray-400 flex-shrink-0" />
-              <input
-                type="password"
-                value={apiKeyInput}
-                onChange={(e) => setApiKeyInput(e.target.value)}
-                placeholder="Paste your API key here..."
-                className="w-full p-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <button
-                onClick={handleApiKeySave}
-                disabled={!apiKeyInput}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 whitespace-nowrap"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        )}
-
-        {session && apiKey && (
-          <>
-            <div className="bg-white rounded-lg shadow-lg p-4 mb-6 flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                <CheckCircle className="w-5 h-5 text-green-600" />
-                <span className="font-medium text-sm">AssemblyAI API Key is configured</span>
-              </div>
-              <button onClick={handleApiKeyClear} className="text-red-600 hover:text-red-700" title="Remove API Key">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-              <h2 className="text-xl font-semibold mb-4">Start a New Transcription</h2>
-              {driveFile ? (
-                <div className="flex items-center justify-between p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                  <div className='flex items-center gap-2 overflow-hidden'>
-                    <File className="w-5 h-5 text-blue-600 flex-shrink-0" />
-                    <span className='font-medium text-blue-800 truncate' title={driveFile.name}>{driveFile.name}</span>
-                  </div>
-                  <button onClick={() => setDriveFile(null)} className="text-gray-500 hover:text-gray-700">
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="flex items-center border border-gray-300 rounded-lg p-2 focus-within:ring-2 focus-within:ring-blue-500">
-                    <Link className="w-5 h-5 mx-2 text-gray-400" />
-                    <input
-                      type="text"
-                      value={audioUrl}
-                      onChange={(e) => setAudioUrl(e.target.value)}
-                      placeholder="Paste a public media URL here..."
-                      className="w-full bg-transparent outline-none"
-                    />
-                  </div>
-
-                  <div className="relative flex py-4 items-center">
-                    <div className="flex-grow border-t border-gray-300"></div>
-                    <span className="flex-shrink mx-4 text-gray-500">OR</span>
-                    <div className="flex-grow border-t border-gray-300"></div>
-                  </div>
-
-                  <button
-                    onClick={handleChooseFromDrive}
-                    className="w-full bg-white border-2 border-gray-300 text-gray-700 py-3 px-4 rounded-lg hover:bg-gray-100 transition-colors flex items-center justify-center gap-2"
-                  >
-                    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7.75 22.5L1.5 12L7.75 1.5H20.5L24 7.5L17.75 18L13.75 11.25L7.75 22.5Z" fill="#2684FC"></path><path d="M1.5 12L4.625 17.25L10.875 6.75L7.75 1.5L1.5 12Z" fill="#00A85D"></path><path d="M20.5 1.5L13.75 11.25L17.75 18L24 7.5L20.5 1.5Z" fill="#FFC107"></path></svg>
-                    Choose from Google Drive
-                  </button>
-                </>
-              )}
-              {error && <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{error}</div>}
-              <button
-                onClick={startTranscription}
-                disabled={isTranscriptionDisabled}
-                className="mt-6 w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors"
-              >
-                {transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error' ? <Loader2 className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5" />}
-                Start Transcription
-              </button>
-              {transcriptionStatus !== 'idle' && <p className="text-center text-gray-600 mt-4 text-sm">{statusMessage}</p>}
-            </div>
-
-            {(transcriptionStatus === 'completed' && currentTranscript) && (
-              <TranscriptDisplay 
-                transcript={currentTranscript} 
-                title={transcriptionTitle} 
-                titleGenerating={titleGenerating}
-                formatTime={formatTime} 
-                getLanguageDisplay={getLanguageDisplay} 
-              />
-            )}
-            
-            <PastTranscriptionsList 
-              pastTranscriptions={pastTranscriptions} 
-              loadPastTranscription={loadPastTranscription} 
-              showPastTranscriptions={showPastTranscriptions} 
-              setShowPastTranscriptions={setShowPastTranscriptions} 
-              getLanguageDisplay={getLanguageDisplay} 
-              formatDate={formatDate} 
-              formatTime={formatTime} 
-            />
-          </>
-        )}
-      </div>
-    </div>
-  );
-};
-
-const TranscriptDisplay = ({ transcript, title, titleGenerating, formatTime, getLanguageDisplay }) => {
-  const [copied, setCopied] = useState(false);
-  const speakerColors = ['text-blue-600', 'text-green-600', 'text-purple-600', 'text-orange-600', 'text-pink-600', 'text-teal-600'];
-  
   const handleCopy = () => {
-    const textToCopy = transcript.utterances.map(u => `Speaker ${u.speaker} (${formatTime(u.start / 1000)}): ${u.text}`).join('\n\n');
-    navigator.clipboard.writeText(textToCopy);
+    if (!selectedTranscript?.fullTranscript?.utterances) return;
+    const text = selectedTranscript.fullTranscript.utterances
+      .map(u => `Speaker ${u.speaker} (${formatTime(u.start / 1000)}): ${u.text}`)
+      .join('\n\n');
+    navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleDownload = () => {
-    const text = transcript.utterances.map(u => `Speaker ${u.speaker} (${formatTime(u.start / 1000)}): ${u.text}`).join('\n\n');
+    if (!selectedTranscript?.fullTranscript?.utterances) return;
+    const text = selectedTranscript.fullTranscript.utterances
+      .map(u => `Speaker ${u.speaker} (${formatTime(u.start / 1000)}): ${u.text}`)
+      .join('\n\n');
     const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `transcript-${transcript.id}.txt`;
+    a.download = `transcript-${selectedTranscript.assemblyAiId}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
+  // Filter and sort
+  const filteredTranscriptions = pastTranscriptions
+    .filter(t => {
+      if (searchQuery && !t.title?.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+      if (filterTag && !t.tags?.includes(filterTag) && getLanguageTag(t.language) !== filterTag) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      if (sortBy === 'date') return new Date(b.createdAt) - new Date(a.createdAt);
+      if (sortBy === 'duration') return (b.duration || 0) - (a.duration || 0);
+      if (sortBy === 'alphabetical') return (a.title || '').localeCompare(b.title || '');
+      return 0;
+    });
+
+  const isTranscriptionDisabled = (!audioUrl && !driveFile) || !['idle', 'completed', 'error'].includes(transcriptionStatus);
+
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center p-4">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 max-w-md w-full">
+          <div className="text-center mb-6">
+            <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full mx-auto mb-4 flex items-center justify-center">
+              <Upload className="w-10 h-10 text-white" />
+            </div>
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">Transcription Hub</h1>
+            <p className="text-gray-600 dark:text-gray-400">Sign in to get started</p>
+          </div>
+          <button
+            onClick={handleGoogleSignIn}
+            className="w-full px-6 py-3 bg-white dark:bg-gray-700 border-2 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 flex items-center justify-center gap-3 transition-all font-medium shadow-sm"
+          >
+            <svg className="w-5 h-5" viewBox="0 0 488 512"><path fill="currentColor" d="M488 261.8C488 403.3 381.5 512 244 512 109.8 512 0 402.2 0 256S109.8 0 244 0c73.2 0 136 29.1 181.2 73.2L375 152.1C341.3 120.3 296.8 97.9 244 97.9c-88.3 0-159.9 71.6-159.9 159.9s71.6 159.9 159.9 159.9c102.4 0 133.4-85.1 136.9-123.9H244v-75.1h236.1c2.3 12.7 3.9 26.1 3.9 40.8z"></path></svg>
+            Sign in with Google
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!apiKey) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center p-4">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 max-w-md w-full">
+          <div className="text-center mb-6">
+            <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full mx-auto mb-4 flex items-center justify-center">
+              <Upload className="w-10 h-10 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">API Key Required</h1>
+            <p className="text-gray-600 dark:text-gray-400 mb-6">Enter your AssemblyAI API key to continue</p>
+          </div>
+          
+          <a
+            href="https://www.assemblyai.com/dashboard/signup"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block w-full mb-4 px-6 py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg hover:shadow-xl"
+          >
+            <div className="flex items-center justify-center gap-3">
+              <Upload className="w-5 h-5" />
+              <div className="text-left">
+                <div className="font-semibold">Get Your Free API Key</div>
+                <div className="text-sm text-blue-100">Sign up at AssemblyAI</div>
+              </div>
+            </div>
+          </a>
+
+          <div className="space-y-3">
+            <input
+              type="password"
+              value={apiKeyInput}
+              onChange={(e) => setApiKeyInput(e.target.value)}
+              placeholder="Paste your API key here..."
+              className="w-full p-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              onClick={handleApiKeySave}
+              disabled={!apiKeyInput}
+              className="w-full px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:bg-gray-300 dark:disabled:bg-gray-600 transition-all font-medium shadow-sm"
+            >
+              Save API Key
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-      <div className="mb-4">
-        <div className="flex items-center gap-2 mb-2">
-          <h3 className="text-xl font-semibold">Transcription Result</h3>
-          {titleGenerating && (
-            <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 text-xs font-medium rounded-full">
-              <Sparkles className="w-3 h-3 animate-pulse" />
-              Generating title...
-            </span>
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
+      {/* Header */}
+      <header className="sticky top-0 z-40 bg-white/80 dark:bg-gray-800/80 backdrop-blur-lg border-b border-gray-200 dark:border-gray-700">
+        <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center">
+              <Upload className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-gray-900 dark:text-white">Transcription Hub</h1>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Powered by AssemblyAI</p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-3">
+            <button
+              onClick={toggleDarkMode}
+              className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              title={darkMode ? 'Light mode' : 'Dark mode'}
+            >
+              {darkMode ? <Sun className="w-5 h-5 text-gray-600 dark:text-gray-300" /> : <Moon className="w-5 h-5 text-gray-600" />}
+            </button>
+            
+            <button
+              onClick={() => setShowSettings(true)}
+              className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              title="Settings"
+            >
+              <Settings className="w-5 h-5 text-gray-600 dark:text-gray-300" />
+            </button>
+            
+            <div className="flex items-center gap-2 pl-3 border-l border-gray-200 dark:border-gray-700">
+              <img src={session.user.image} alt="Profile" className="w-8 h-8 rounded-full" />
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300 hidden sm:block">{session.user.name}</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* New Transcription Section */}
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 mb-8">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+            <Upload className="w-5 h-5" />
+            New Transcription
+          </h2>
+          
+          {driveFile ? (
+            <div className="flex items-center justify-between p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl mb-4">
+              <div className="flex items-center gap-3 overflow-hidden">
+                <File className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                <span className="font-medium text-blue-900 dark:text-blue-100 truncate">{driveFile.name}</span>
+              </div>
+              <button onClick={() => setDriveFile(null)} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 mb-4">
+                <input
+                  type="text"
+                  value={audioUrl}
+                  onChange={(e) => setAudioUrl(e.target.value)}
+                  placeholder="Paste a public media URL here..."
+                  className="flex-1 p-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              
+              <div className="relative flex py-4 items-center">
+                <div className="flex-grow border-t border-gray-300 dark:border-gray-600"></div>
+                <span className="flex-shrink mx-4 text-sm text-gray-500 dark:text-gray-400">OR</span>
+                <div className="flex-grow border-t border-gray-300 dark:border-gray-600"></div>
+              </div>
+              
+              <button
+                onClick={handleChooseFromDrive}
+                className="w-full bg-white dark:bg-gray-700 border-2 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 py-3 px-4 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-all flex items-center justify-center gap-2 font-medium"
+              >
+                <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none"><path d="M7.75 22.5L1.5 12L7.75 1.5H20.5L24 7.5L17.75 18L13.75 11.25L7.75 22.5Z" fill="#2684FC"></path><path d="M1.5 12L4.625 17.25L10.875 6.75L7.75 1.5L1.5 12Z" fill="#00A85D"></path><path d="M20.5 1.5L13.75 11.25L17.75 18L24 7.5L20.5 1.5Z" fill="#FFC107"></path></svg>
+                Choose from Google Drive
+              </button>
+            </>
+          )}
+          
+          {error && <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-400 text-sm">{error}</div>}
+          
+          <button
+            onClick={startTranscription}
+            disabled={isTranscriptionDisabled}
+            className="mt-4 w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 px-6 rounded-xl hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-500 flex items-center justify-center gap-2 transition-all font-medium shadow-lg disabled:shadow-none"
+          >
+            {transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error' ? 
+              <Loader2 className="w-5 h-5 animate-spin" /> : 
+              <Upload className="w-5 h-5" />
+            }
+            {transcriptionStatus !== 'idle' ? statusMessage : 'Start Transcription'}
+          </button>
+        </div>
+
+        {/* Search & Filter Bar */}
+        <div className="flex flex-col sm:flex-row gap-4 mb-6">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search transcriptions..."
+              className="w-full pl-10 pr-4 py-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="px-4 py-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="date">Sort by Date</option>
+            <option value="duration">Sort by Duration</option>
+            <option value="alphabetical">Sort A-Z</option>
+          </select>
+          
+          {allTags.length > 0 && (
+            <select
+              value={filterTag || ''}
+              onChange={(e) => setFilterTag(e.target.value || null)}
+              className="px-4 py-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">All Tags</option>
+              {allTags.map(tag => <option key={tag} value={tag}>{tag}</option>)}
+            </select>
           )}
         </div>
-        {title && <p className="text-lg font-medium text-gray-700 mb-2">{title}</p>}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600">
-          <span>Language: {getLanguageDisplay(transcript.language_code)}</span>
-          <span>Duration: {formatTime(transcript.audio_duration)}</span>
-          <span>Words: {transcript.words?.length || 0}</span>
-        </div>
-      </div>
-      <div className="space-y-3 max-h-[50vh] overflow-y-auto p-3 bg-gray-50 rounded-md border">
-        {transcript.utterances?.map((utterance, index) => (
-          <div key={index} className="flex flex-col sm:flex-row gap-2 sm:gap-3 p-2 hover:bg-gray-100 rounded">
-            <div className="flex items-center gap-2 min-w-max">
-              <User className={`w-5 h-5 ${speakerColors[utterance.speaker.charCodeAt(0) % speakerColors.length]}`} />
-              <span className={`font-semibold ${speakerColors[utterance.speaker.charCodeAt(0) % speakerColors.length]}`}>Speaker {utterance.speaker}</span>
-              <span className="text-xs text-gray-500">({formatTime(utterance.start / 1000)})</span>
+
+        {/* Transcriptions Grid */}
+        {filteredTranscriptions.length === 0 ? (
+          <div className="text-center py-16">
+            <div className="w-24 h-24 bg-gray-100 dark:bg-gray-800 rounded-full mx-auto mb-4 flex items-center justify-center">
+              <File className="w-12 h-12 text-gray-400" />
             </div>
-            <p className="text-gray-800 flex-1">{utterance.text}</p>
+            <h3 className="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-2">No transcriptions yet</h3>
+            <p className="text-gray-500 dark:text-gray-400">Create your first transcription or sync from AssemblyAI</p>
           </div>
-        ))}
-      </div>
-      <div className="mt-4 pt-4 border-t flex items-center gap-4">
-        <button onClick={handleCopy} className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center gap-1.5 transition-colors">
-          {copied ? <><ClipboardCheck className="w-4 h-4 text-green-600" /> Copied!</> : <><Copy className="w-4 h-4" /> Copy Transcript</>}
-        </button>
-        <button onClick={handleDownload} className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center gap-1.5">
-          <Upload className="w-4 h-4" /> Download
-        </button>
-      </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+            {filteredTranscriptions.map((transcription) => (
+              <div
+                key={transcription.id}
+                onClick={() => loadTranscript(transcription)}
+                className="bg-white dark:bg-gray-800 rounded-2xl shadow-md hover:shadow-2xl transition-all duration-300 cursor-pointer overflow-hidden group hover:scale-[1.02]"
+              >
+                <div className="p-6">
+                  <div className="flex items-start justify-between mb-3">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white line-clamp-2 flex-1">
+                      {transcription.title || 'Untitled Transcription'}
+                    </h3>
+                    {transcription.titleGenerating && <Sparkles className="w-5 h-5 text-blue-500 animate-pulse flex-shrink-0 ml-2" />}
+                  </div>
+                  
+                  <div className="flex items-center gap-2 mb-4 text-sm text-gray-600 dark:text-gray-400">
+                    <span className="flex items-center gap-1">
+                      {getLanguageEmoji(transcription.language)}
+                      {getLanguageTag(transcription.language)}
+                    </span>
+                    <span>•</span>
+                    <span>{formatTime(transcription.duration || 0)}</span>
+                  </div>
+                  
+                  <div className="relative h-20 overflow-hidden">
+                    <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-3">
+                      {getTranscriptPreview(transcription) || 'Loading preview...'}
+                    </p>
+                    <div className="absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-white dark:from-gray-800 to-transparent"></div>
+                  </div>
+                  
+                  <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                      {formatDate(transcription.createdAt)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
+
+      {/* Settings Panel */}
+      {showSettings && (
+        <>
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" onClick={() => setShowSettings(false)}></div>
+          <div className="fixed right-0 top-0 bottom-0 w-full sm:w-96 bg-white dark:bg-gray-800 shadow-2xl z-50 overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Settings</h2>
+                <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              
+              {/* Sync Section */}
+              <div className="mb-8">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                  <RefreshCw className="w-5 h-5" />
+                  Sync from AssemblyAI
+                </h3>
+                <button
+                  onClick={handleSync}
+                  disabled={syncing}
+                  className="w-full px-4 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:bg-gray-400 transition-all font-medium flex items-center justify-center gap-2"
+                >
+                  {syncing ? <Loader2 className="w-5 h-5 animate-spin" /> : <RefreshCw className="w-5 h-5" />}
+                  {syncing ? 'Syncing...' : 'Sync Now'}
+                </button>
+                {syncing && syncProgress.total > 0 && (
+                  <div className="mt-3 text-sm text-gray-600 dark:text-gray-400 text-center">
+                    Synced {syncProgress.synced} of {syncProgress.total} transcriptions
+                  </div>
+                )}
+              </div>
+              
+              {/* API Key Section */}
+              <div className="mb-8">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">API Key</h3>
+                <div className="space-y-3">
+                  <input
+                    type="password"
+                    value={apiKeyInput}
+                    onChange={(e) => setApiKeyInput(e.target.value)}
+                    placeholder="Enter new API key..."
+                    className="w-full p-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    onClick={handleApiKeySave}
+                    disabled={!apiKeyInput}
+                    className="w-full px-4 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:bg-gray-400 transition-all font-medium"
+                  >
+                    Update API Key
+                  </button>
+                  <button
+                    onClick={handleApiKeyClear}
+                    className="w-full px-4 py-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-all font-medium"
+                  >
+                    Clear API Key
+                  </button>
+                </div>
+              </div>
+              
+              {/* Account Section */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Account</h3>
+                <button
+                  onClick={() => signOut()}
+                  className="w-full px-4 py-3 bg-gray-600 text-white rounded-xl hover:bg-gray-700 transition-all font-medium"
+                >
+                  Log Out
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Transcript Modal */}
+      {showModal && selectedTranscript && (
+        <>
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" onClick={() => setShowModal(false)}></div>
+          <div className="fixed inset-4 sm:inset-10 lg:inset-20 bg-white dark:bg-gray-800 rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col">
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex items-start justify-between">
+              <div className="flex-1">
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+                  {selectedTranscript.title || 'Untitled Transcription'}
+                </h2>
+                <div className="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-400">
+                  <span>{getLanguageEmoji(selectedTranscript.language)} {getLanguageTag(selectedTranscript.language)}</span>
+                  <span>•</span>
+                  <span>{formatTime(selectedTranscript.duration || 0)}</span>
+                  <span>•</span>
+                  <span>{selectedTranscript.wordCount || 0} words</span>
+                </div>
+              </div>
+              <button onClick={() => setShowModal(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-6">
+              {selectedTranscript.fullTranscript?.utterances?.map((utterance, index) => {
+                const speakerColors = ['text-blue-600', 'text-green-600', 'text-purple-600', 'text-orange-600', 'text-pink-600', 'text-teal-600'];
+                const colorClass = speakerColors[utterance.speaker.charCodeAt(0) % speakerColors.length];
+                return (
+                  <div key={index} className="mb-4 pb-4 border-b border-gray-100 dark:border-gray-700 last:border-0">
+                    <div className="flex items-center gap-2 mb-2">
+                      <User className={`w-4 h-4 ${colorClass}`} />
+                      <span className={`font-semibold ${colorClass}`}>Speaker {utterance.speaker}</span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400">({formatTime(utterance.start / 1000)})</span>
+                    </div>
+                    <p className="text-gray-800 dark:text-gray-200 leading-relaxed">{utterance.text}</p>
+                  </div>
+                );
+              })}
+            </div>
+            
+            <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex items-center gap-4">
+              <button
+                onClick={handleCopy}
+                className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all font-medium flex items-center justify-center gap-2 shadow-lg"
+              >
+                {copied ? <Check className="w-5 h-5" /> : <Copy className="w-5 h-5" />}
+                {copied ? 'Copied!' : 'Copy Transcript'}
+              </button>
+              <button
+                onClick={handleDownload}
+                className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all font-medium flex items-center justify-center gap-2 shadow-lg"
+              >
+                <Download className="w-5 h-5" />
+                Download
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Sync Progress Toast - Only visible when syncing */}
+      {syncing && (
+        <div className="fixed bottom-6 right-6 bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-4 z-50 flex items-center gap-3 border border-gray-200 dark:border-gray-700">
+          <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+          <div>
+            <div className="font-medium text-gray-900 dark:text-white">Syncing transcriptions...</div>
+            {syncProgress.total > 0 && (
+              <div className="text-sm text-gray-600 dark:text-gray-400">
+                {syncProgress.synced} of {syncProgress.total}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
-
-const PastTranscriptionsList = ({ pastTranscriptions, loadPastTranscription, showPastTranscriptions, setShowPastTranscriptions, getLanguageDisplay, formatDate, formatTime }) => (
-  <div className="bg-white rounded-lg shadow-lg p-6">
-    <div className="flex items-center justify-between mb-4">
-      <h3 className="text-lg font-semibold">Past Transcriptions</h3>
-      <button onClick={() => setShowPastTranscriptions(!showPastTranscriptions)} className="text-blue-600 hover:text-blue-700">
-        {showPastTranscriptions ? <ChevronUp /> : <ChevronDown />}
-      </button>
-    </div>
-    {showPastTranscriptions && (
-      <div className="space-y-3 max-h-96 overflow-y-auto">
-        {pastTranscriptions.length === 0 ? (
-          <p className="text-gray-500 text-center py-4">No past transcriptions found.</p>
-        ) : (
-          pastTranscriptions.map((transcription) => (
-            <div 
-              key={transcription.id} 
-              className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 cursor-pointer transition-colors" 
-              onClick={() => loadPastTranscription(transcription)}
-            >
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="font-medium text-gray-800">
-                      {transcription.title || transcription.fileName || 'Untitled Transcription'}
-                    </p>
-                    {transcription.titleGenerating && (
-                      <Sparkles className="w-4 h-4 text-blue-500 animate-pulse" />
-                    )}
-                  </div>
-                  <p className="text-xs text-gray-500">{formatDate(transcription.createdAt)}</p>
-                </div>
-                <div className="text-left sm:text-right w-full sm:w-auto">
-                  <p className="text-sm text-gray-600">{getLanguageDisplay(transcription.language)} • {formatTime(transcription.duration || 0)}</p>
-                </div>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-    )}
-  </div>
-);
 
 export default AssemblyAITranscription;
