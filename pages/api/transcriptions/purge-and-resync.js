@@ -3,7 +3,6 @@ import { prisma } from '../../../lib/prisma';
 import { getToken } from 'next-auth/jwt';
 import { generateTitle, generateFallbackTitle } from '../../../lib/gemini-queue';
 import { generatePreview } from '../../../lib/transcript-utils';
-import { waitUntil } from '@vercel/functions';
 
 /**
  * Sleep helper for rate limiting
@@ -11,10 +10,10 @@ import { waitUntil } from '@vercel/functions';
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Fetch all transcripts from AssemblyAI with pagination
+ * Fetch transcript IDs from AssemblyAI (light fetch, no full details)
  */
-async function fetchAllTranscripts(assemblyAiKey) {
-  let allTranscripts = [];
+async function fetchAllTranscriptIds(assemblyAiKey) {
+  let allIds = [];
   let url = 'https://api.assemblyai.com/v2/transcript?limit=100&status=completed';
   
   while (url) {
@@ -29,26 +28,24 @@ async function fetchAllTranscripts(assemblyAiKey) {
     const data = await response.json();
     const transcripts = data.transcripts || [];
     
-    allTranscripts = allTranscripts.concat(transcripts);
+    // Only collect IDs for this light fetch
+    allIds = allIds.concat(transcripts.map(t => t.id));
     
-    // Use the next_url directly from the API response
     url = data.page_details?.next_url;
     
-    // Rate limiting: wait 500ms between pagination requests
     if (url) {
-      await sleep(500);
+      await sleep(300); // Lighter rate limiting for ID-only fetches
     }
   }
   
-  return allTranscripts;
+  return allIds;
 }
 
 /**
  * Fetch full transcript details with rate limiting
  */
 async function fetchTranscriptDetails(transcriptId, assemblyAiKey) {
-  // Rate limiting: 50 requests per minute for AssemblyAI
-  await sleep(1200); // 1.2 seconds between requests = max 50/min
+  await sleep(1200); // 1.2 seconds between requests
   
   const response = await fetch(
     `https://api.assemblyai.com/v2/transcript/${transcriptId}`,
@@ -64,48 +61,93 @@ async function fetchTranscriptDetails(transcriptId, assemblyAiKey) {
 }
 
 /**
- * Background function that handles the entire purge and re-sync process
- * This runs independently after the API response is sent
+ * Batch processing endpoint for Vercel Hobby plan (10s timeout limit)
+ * Processes transcriptions in small batches to stay within timeout
  */
-async function runPurgeAndResyncInBackground(userEmail, assemblyAiKey) {
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
+  
+  if (!token || !token.user?.email) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { assemblyAiKey, batch = 0, batchSize = 5 } = req.body;
+
+  if (!assemblyAiKey) {
+    return res.status(400).json({ error: 'AssemblyAI API key is required' });
+  }
+
+  const userEmail = token.user.email;
+
   try {
-    console.log(`🗑️ Starting purge and re-sync for user: ${userEmail}`);
-    
     // ==========================================
-    // PHASE 1: PURGE
+    // BATCH 0: PURGE DATABASE & GET TOTAL COUNT
     // ==========================================
-    console.log('📋 Phase 1: Purging existing transcriptions...');
-    const deleteResult = await prisma.transcription.deleteMany({
-      where: { userEmail }
-    });
-    console.log(`✅ Deleted ${deleteResult.count} existing transcriptions`);
+    if (batch === 0) {
+      console.log(`🗑️ Batch 0: Purging existing transcriptions for user: ${userEmail}`);
+      
+      const deleteResult = await prisma.transcription.deleteMany({
+        where: { userEmail }
+      });
+      console.log(`✅ Deleted ${deleteResult.count} existing transcriptions`);
 
-    // ==========================================
-    // PHASE 2: FETCH ALL TRANSCRIPTS
-    // ==========================================
-    console.log('📥 Phase 2: Fetching all transcripts from AssemblyAI...');
-    const transcriptsList = await fetchAllTranscripts(assemblyAiKey);
-    console.log(`✅ Found ${transcriptsList.length} completed transcripts`);
+      // Fetch all transcript IDs (light operation)
+      console.log('📥 Fetching all transcript IDs from AssemblyAI...');
+      const allTranscriptIds = await fetchAllTranscriptIds(assemblyAiKey);
+      console.log(`✅ Found ${allTranscriptIds.length} completed transcripts`);
 
-    if (transcriptsList.length === 0) {
-      console.log('No transcripts found in AssemblyAI. Process finished.');
-      return;
+      if (allTranscriptIds.length === 0) {
+        return res.status(200).json({
+          success: true,
+          batch: 0,
+          totalBatches: 0,
+          synced: 0,
+          total: 0,
+          message: 'No transcripts found in AssemblyAI',
+        });
+      }
+
+      const totalBatches = Math.ceil(allTranscriptIds.length / batchSize);
+
+      // Store IDs in a simple cache (in production, use Redis or similar)
+      // For now, we'll return them to the client and client sends them back
+      return res.status(200).json({
+        success: true,
+        batch: 0,
+        totalBatches,
+        total: allTranscriptIds.length,
+        transcriptIds: allTranscriptIds,
+        message: `Database purged. Ready to sync ${allTranscriptIds.length} transcriptions in ${totalBatches} batches.`,
+      });
     }
 
     // ==========================================
-    // PHASE 3 & 4: SYNC TRANSCRIPTS AND GENERATE TITLES
-    // Combined for efficiency, generate titles immediately after creating records
+    // BATCH N: SYNC THIS BATCH OF TRANSCRIPTS
     // ==========================================
-    console.log('🔄 Phase 3: Syncing transcripts and queueing title generation...');
+    const { transcriptIds } = req.body;
     
-    for (let i = 0; i < transcriptsList.length; i++) {
-      const transcriptSummary = transcriptsList[i];
-      console.log(`📝 Syncing ${i + 1}/${transcriptsList.length}: ${transcriptSummary.id}`);
+    if (!transcriptIds || !Array.isArray(transcriptIds)) {
+      return res.status(400).json({ error: 'transcriptIds array is required for batch > 0' });
+    }
 
+    const startIdx = (batch - 1) * batchSize;
+    const endIdx = Math.min(startIdx + batchSize, transcriptIds.length);
+    const batchIds = transcriptIds.slice(startIdx, endIdx);
+
+    console.log(`🔄 Batch ${batch}: Processing transcripts ${startIdx + 1}-${endIdx} of ${transcriptIds.length}`);
+
+    let syncedCount = 0;
+
+    for (const transcriptId of batchIds) {
       try {
-        const fullTranscript = await fetchTranscriptDetails(transcriptSummary.id, assemblyAiKey);
+        const fullTranscript = await fetchTranscriptDetails(transcriptId, assemblyAiKey);
+        
         if (!fullTranscript) {
-          console.warn(`⚠️ Skipping ${transcriptSummary.id}: Failed to fetch details`);
+          console.warn(`⚠️ Skipping ${transcriptId}: Failed to fetch details`);
           continue;
         }
 
@@ -127,7 +169,7 @@ async function runPurgeAndResyncInBackground(userEmail, assemblyAiKey) {
           },
         });
 
-        // Queue title generation immediately after creating the record
+        // Queue title generation in background (fire and forget)
         generateTitle(fullTranscript).then(async (title) => {
           if (!title) {
             title = generateFallbackTitle(transcription.fileName, transcription.language, transcription.duration);
@@ -145,45 +187,34 @@ async function runPurgeAndResyncInBackground(userEmail, assemblyAiKey) {
           });
         });
 
+        syncedCount++;
       } catch (error) {
-        console.error(`❌ Error syncing ${transcriptSummary.id}:`, error.message);
+        console.error(`❌ Error syncing ${transcriptId}:`, error.message);
       }
     }
-    
-    console.log(`🎉 Purge and re-sync process complete!`);
+
+    const totalBatches = Math.ceil(transcriptIds.length / batchSize);
+    const hasMore = batch < totalBatches;
+
+    console.log(`✅ Batch ${batch} complete: Synced ${syncedCount} transcriptions`);
+
+    return res.status(200).json({
+      success: true,
+      batch,
+      totalBatches,
+      synced: syncedCount,
+      total: transcriptIds.length,
+      hasMore,
+      message: hasMore 
+        ? `Batch ${batch}/${totalBatches} complete. Continue with next batch.`
+        : `All ${transcriptIds.length} transcriptions synced successfully!`,
+    });
 
   } catch (error) {
-    console.error('❌ Error during purge and re-sync background process:', error);
+    console.error('❌ Error during batch processing:', error);
+    return res.status(500).json({ 
+      error: 'Failed to process batch',
+      details: error.message 
+    });
   }
-}
-
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
-  
-  if (!token || !token.user?.email) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const { assemblyAiKey } = req.body;
-
-  if (!assemblyAiKey) {
-    return res.status(400).json({ error: 'AssemblyAI API key is required' });
-  }
-
-  const userEmail = token.user.email;
-
-  // *** CRITICAL FIX: Use waitUntil() to ensure background task completes ***
-  // This tells Vercel to keep the serverless function alive until the promise resolves
-  waitUntil(runPurgeAndResyncInBackground(userEmail, assemblyAiKey));
-
-  // Return an immediate success response to the client
-  // 202 Accepted indicates the request has been accepted for processing
-  return res.status(202).json({ 
-    success: true,
-    message: 'Purge and re-sync process has been started in the background. Your transcriptions will appear as they are processed.',
-  });
 }
