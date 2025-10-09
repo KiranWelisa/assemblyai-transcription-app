@@ -344,7 +344,7 @@ const AssemblyAITranscription = () => {
     }
   };
 
-  // Client-side Batch Orchestration voor Purge & Re-sync
+  // NIEUWE CLIENT-SIDE BATCH ORCHESTRATION voor Purge & Re-sync
   const handlePurgeAndResync = async () => {
     if (!apiKey) return;
     
@@ -352,25 +352,27 @@ const AssemblyAITranscription = () => {
     setShowSettings(false);
     setShowResyncProgress(true);
     setResyncProgress({ current: 0, total: 0, currentBatch: 0, totalBatches: 0 });
-    titleProcessedRef.current = false; // Reset voor nieuwe sync
+    titleProcessedRef.current = false;
 
     try {
-      const batch0Response = await fetch('/api/transcriptions/purge-and-resync', {
+      // ==========================================
+      // FASE 1: QUICK SYNC (insert placeholders)
+      // ==========================================
+      console.log('🚀 Phase 1: Quick Sync starting...');
+      
+      const initResponse = await fetch('/api/transcriptions/init-sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          assemblyAiKey: apiKey, 
-          batch: 0 
-        }),
+        body: JSON.stringify({ assemblyAiKey: apiKey }),
       });
 
-      if (!batch0Response.ok) {
-        const errorData = await batch0Response.json();
-        throw new Error(errorData.error || 'Failed to start purge and re-sync');
+      if (!initResponse.ok) {
+        const errorData = await initResponse.json();
+        throw new Error(errorData.error || 'Failed to initialize sync');
       }
 
-      const batch0Data = await batch0Response.json();
-      const { transcriptData, totalBatches, total } = batch0Data;
+      const initData = await initResponse.json();
+      const { ids, total } = initData;
 
       if (total === 0) {
         setShowResyncProgress(false);
@@ -378,8 +380,19 @@ const AssemblyAITranscription = () => {
         return;
       }
 
-      console.log(`✅ Batch 0 compleet. Gevonden: ${total} transcripties in ${totalBatches} batches`);
+      console.log(`✅ Phase 1 complete! Found ${total} transcripts`);
       
+      // Refresh UI om placeholders te tonen
+      await fetchPastTranscriptions();
+
+      // ==========================================
+      // FASE 2: PROGRESSIVE ENRICHMENT (batches)
+      // ==========================================
+      console.log('🔄 Phase 2: Progressive Enrichment starting...');
+      
+      const BATCH_SIZE = 3; // 3 items per batch (veilig binnen 10s)
+      const totalBatches = Math.ceil(total / BATCH_SIZE);
+
       setResyncProgress({ 
         current: 0, 
         total, 
@@ -387,60 +400,71 @@ const AssemblyAITranscription = () => {
         totalBatches 
       });
 
+      // Start background polling voor real-time updates
       startBackgroundPolling();
 
-      let totalSynced = 0;
+      let enrichedCount = 0;
 
       for (let batchNum = 1; batchNum <= totalBatches; batchNum++) {
-        console.log(`🔄 Starting Batch ${batchNum}/${totalBatches}...`);
+        const startIdx = (batchNum - 1) * BATCH_SIZE;
+        const endIdx = Math.min(startIdx + BATCH_SIZE, total);
+        const batchIds = ids.slice(startIdx, endIdx);
+
+        console.log(`📦 Enriching batch ${batchNum}/${totalBatches}: ${batchIds.length} items`);
         
         setResyncProgress(prev => ({ 
           ...prev, 
           currentBatch: batchNum 
         }));
 
-        const batchResponse = await fetch('/api/transcriptions/purge-and-resync', {
+        const enrichResponse = await fetch('/api/transcriptions/enrich-batch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            assemblyAiKey: apiKey, 
-            batch: batchNum,
-            transcriptIds: transcriptData 
+            assemblyAiKey: apiKey,
+            transcriptIds: batchIds,
           }),
         });
 
-        if (!batchResponse.ok) {
-          const errorData = await batchResponse.json();
+        if (!enrichResponse.ok) {
+          const errorData = await enrichResponse.json();
           console.error(`❌ Batch ${batchNum} failed:`, errorData.error);
+          // Continue met volgende batch (don't fail entire process)
           continue;
         }
 
-        const batchData = await batchResponse.json();
-        totalSynced += batchData.synced;
+        const enrichData = await enrichResponse.json();
+        enrichedCount += enrichData.successful;
 
         setResyncProgress(prev => ({ 
           ...prev, 
-          current: totalSynced 
+          current: enrichedCount 
         }));
 
-        console.log(`✅ Batch ${batchNum}/${totalBatches} compleet: ${batchData.synced} transcripties gesynchroniseerd`);
+        console.log(`✅ Batch ${batchNum}/${totalBatches} complete: ${enrichData.successful}/${batchIds.length} successful`);
 
+        // Refresh UI na elke batch
         await fetchPastTranscriptions();
 
+        // Kleine delay tussen batches (optional, voor UI smoothness)
         if (batchNum < totalBatches) {
           await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
 
+      // Stop background polling
       stopBackgroundPolling();
+      
+      // Final refresh
       await fetchPastTranscriptions();
 
+      // Hide progress toast na 2 seconden
       setTimeout(() => {
         setShowResyncProgress(false);
         setResyncProgress({ current: 0, total: 0, currentBatch: 0, totalBatches: 0 });
       }, 2000);
 
-      console.log(`🎉 Re-sync compleet! ${totalSynced}/${total} transcripties gesynchroniseerd`);
+      console.log(`🎉 Re-sync complete! ${enrichedCount}/${total} transcripts enriched`);
 
     } catch (error) {
       console.error('❌ Purge and re-sync error:', error);
@@ -1102,25 +1126,42 @@ const AssemblyAITranscription = () => {
               <RefreshCw className="w-6 h-6 text-blue-600 dark:text-blue-400 animate-spin" />
             </div>
             <div className="flex-1">
-              <h4 className="font-semibold text-gray-900 dark:text-white mb-2">Re-syncing transcriptions...</h4>
-              
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400">
-                  <span>Batch {resyncProgress.currentBatch} van {resyncProgress.totalBatches}</span>
-                  <span className="font-medium">{resyncProgress.current} / {resyncProgress.total}</span>
-                </div>
-                
-                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
-                  <div 
-                    className="bg-gradient-to-r from-blue-500 to-indigo-600 h-full transition-all duration-300 ease-out"
-                    style={{ width: `${resyncProgress.total > 0 ? (resyncProgress.current / resyncProgress.total) * 100 : 0}%` }}
-                  ></div>
-                </div>
-                
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  Transcripties verschijnen automatisch terwijl ze worden gesynchroniseerd
-                </p>
-              </div>
+              {resyncProgress.currentBatch === 0 ? (
+                <>
+                  <h4 className="font-semibold text-gray-900 dark:text-white mb-2">
+                    Initializing sync...
+                  </h4>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Fetching transcript IDs from AssemblyAI
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h4 className="font-semibold text-gray-900 dark:text-white mb-2">
+                    Enriching transcripts...
+                  </h4>
+                  
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400">
+                      <span>Batch {resyncProgress.currentBatch} van {resyncProgress.totalBatches}</span>
+                      <span className="font-medium">{resyncProgress.current} / {resyncProgress.total}</span>
+                    </div>
+                    
+                    <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                      <div 
+                        className="bg-gradient-to-r from-blue-500 to-indigo-600 h-full transition-all duration-300 ease-out"
+                        style={{ 
+                          width: `${resyncProgress.total > 0 ? (resyncProgress.current / resyncProgress.total) * 100 : 0}%` 
+                        }}
+                      ></div>
+                    </div>
+                    
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Metadata wordt geladen. Titels worden gegenereerd in de achtergrond.
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
