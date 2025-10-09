@@ -1,6 +1,6 @@
 // components/AssemblyAITranscription.js
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Link, Loader2, User, X, File, Copy, Check, Download, Settings, Moon, Sun, Search, SlidersHorizontal, Tag as TagIcon, Plus, Sparkles, RefreshCw, ChevronDown, Filter } from 'lucide-react';
+import { Upload, Link, Loader2, User, X, File, Copy, Check, Download, Settings, Moon, Sun, Search, SlidersHorizontal, Tag as TagIcon, Plus, Sparkles, RefreshCw, ChevronDown, Filter, Trash2, AlertTriangle } from 'lucide-react';
 import { useSession, signIn, signOut } from 'next-auth/react';
 
 const AssemblyAITranscription = () => {
@@ -10,6 +10,9 @@ const AssemblyAITranscription = () => {
   const [darkMode, setDarkMode] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [showPurgeConfirm, setShowPurgeConfirm] = useState(false);
+  const [showResyncProgress, setShowResyncProgress] = useState(false);
+  const [resyncProgress, setResyncProgress] = useState({ phase: '', current: 0, total: 0, message: '' });
   const [selectedTranscript, setSelectedTranscript] = useState(null);
   const [audioUrl, setAudioUrl] = useState('');
   const [transcriptionStatus, setTranscriptionStatus] = useState('idle');
@@ -34,6 +37,7 @@ const AssemblyAITranscription = () => {
   const pickerLoadedRef = useRef(false);
   const oneTapRef = useRef(false);
   const titlePollingRef = useRef(null);
+  const resyncPollingRef = useRef(null);
 
   // Dark mode
   useEffect(() => {
@@ -231,7 +235,6 @@ const AssemblyAITranscription = () => {
       const data = await response.json();
       setSyncProgress({ synced: data.synced, total: data.total });
       
-      // Refresh transcriptions
       await fetchPastTranscriptions();
       
       setTimeout(() => setSyncing(false), 2000);
@@ -241,6 +244,66 @@ const AssemblyAITranscription = () => {
       setSyncing(false);
     }
   };
+
+  // Purge and Re-sync
+  const handlePurgeAndResync = async () => {
+    if (!apiKey) return;
+    
+    setShowPurgeConfirm(false);
+    setShowResyncProgress(true);
+    setShowSettings(false);
+    setResyncProgress({ phase: 'Starting', current: 0, total: 0, message: 'Initializing purge and re-sync...' });
+    
+    try {
+      const response = await fetch('/api/transcriptions/purge-and-resync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assemblyAiKey: apiKey }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Purge and re-sync failed');
+      }
+
+      const data = await response.json();
+      
+      setResyncProgress({
+        phase: 'Complete',
+        current: data.synced,
+        total: data.total,
+        message: data.message
+      });
+
+      await fetchPastTranscriptions();
+      
+      setTimeout(() => {
+        setShowResyncProgress(false);
+      }, 3000);
+
+    } catch (error) {
+      console.error('Purge and re-sync error:', error);
+      setResyncProgress({
+        phase: 'Error',
+        current: 0,
+        total: 0,
+        message: error.message || 'An error occurred during purge and re-sync'
+      });
+      
+      setTimeout(() => {
+        setShowResyncProgress(false);
+        setError(error.message);
+      }, 3000);
+    }
+  };
+
+  // Cleanup polling intervals
+  useEffect(() => {
+    return () => {
+      if (titlePollingRef.current) clearInterval(titlePollingRef.current);
+      if (resyncPollingRef.current) clearInterval(resyncPollingRef.current);
+    };
+  }, []);
 
   const pollTranscriptionStatus = async (transcriptId) => {
     if (!apiKey) return;
@@ -285,12 +348,6 @@ const AssemblyAITranscription = () => {
       }
     }, 30000);
   };
-
-  useEffect(() => {
-    return () => {
-      if (titlePollingRef.current) clearInterval(titlePollingRef.current);
-    };
-  }, []);
 
   const startTranscription = async () => {
     if (!apiKey) return setError('Please provide your AssemblyAI API key.');
@@ -342,7 +399,6 @@ const AssemblyAITranscription = () => {
       setTranscriptionStatus('completed');
       setStatusMessage('Transcription complete!');
 
-      // Save to database
       try {
         const saveResponse = await fetch('/api/transcriptions', {
           method: 'POST',
@@ -404,7 +460,6 @@ const AssemblyAITranscription = () => {
       const data = await response.json();
       setPastTranscriptions(data.transcriptions || []);
       
-      // Extract unique tags
       const tags = new Set();
       data.transcriptions.forEach(t => {
         if (t.tags) t.tags.forEach(tag => tags.add(tag));
@@ -416,15 +471,11 @@ const AssemblyAITranscription = () => {
     }
   };
 
-  // UPDATED: Use proxy API instead of direct AssemblyAI call
   const loadTranscript = async (transcription) => {
     if (!apiKey) return;
     try {
-      // Use our proxy API to avoid CORS preflight
       const response = await fetch(`/api/assemblyai/transcript/${transcription.assemblyAiId}`, {
-        headers: { 
-          'x-assemblyai-key': apiKey 
-        }
+        headers: { 'x-assemblyai-key': apiKey }
       });
       
       if (!response.ok) throw new Error('Failed to load transcript');
@@ -490,7 +541,6 @@ const AssemblyAITranscription = () => {
     URL.revokeObjectURL(url);
   };
 
-  // Filter and sort - UPDATED to use assemblyCreatedAt
   const filteredTranscriptions = pastTranscriptions
     .filter(t => {
       if (searchQuery && !t.title?.toLowerCase().includes(searchQuery.toLowerCase())) return false;
@@ -499,7 +549,6 @@ const AssemblyAITranscription = () => {
     })
     .sort((a, b) => {
       if (sortBy === 'date') {
-        // Use AssemblyAI creation date, fallback to database date if not available
         const dateA = a.assemblyCreatedAt ? new Date(a.assemblyCreatedAt) : new Date(a.createdAt);
         const dateB = b.assemblyCreatedAt ? new Date(b.assemblyCreatedAt) : new Date(b.createdAt);
         return dateB - dateA;
@@ -794,16 +843,30 @@ const AssemblyAITranscription = () => {
                 <button
                   onClick={handleSync}
                   disabled={syncing}
-                  className="w-full px-4 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:bg-gray-400 transition-all font-medium flex items-center justify-center gap-2"
+                  className="w-full mb-3 px-4 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:bg-gray-400 transition-all font-medium flex items-center justify-center gap-2"
                 >
                   {syncing ? <Loader2 className="w-5 h-5 animate-spin" /> : <RefreshCw className="w-5 h-5" />}
-                  {syncing ? 'Syncing...' : 'Sync Now'}
+                  {syncing ? 'Syncing...' : 'Sync New Transcriptions'}
                 </button>
+                
+                <button
+                  onClick={() => setShowPurgeConfirm(true)}
+                  disabled={syncing}
+                  className="w-full px-4 py-3 bg-orange-600 text-white rounded-xl hover:bg-orange-700 disabled:bg-gray-400 transition-all font-medium flex items-center justify-center gap-2"
+                >
+                  <Trash2 className="w-5 h-5" />
+                  Purge & Re-sync All
+                </button>
+                
                 {syncing && syncProgress.total > 0 && (
                   <div className="mt-3 text-sm text-gray-600 dark:text-gray-400 text-center">
                     Synced {syncProgress.synced} of {syncProgress.total} transcriptions
                   </div>
                 )}
+                
+                <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                  Purge & Re-sync will delete all your local transcriptions and fetch them again from AssemblyAI with updated metadata.
+                </p>
               </div>
               
               {/* API Key Section */}
@@ -843,6 +906,100 @@ const AssemblyAITranscription = () => {
                   Log Out
                 </button>
               </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Purge Confirmation Modal */}
+      {showPurgeConfirm && (
+        <>
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60]" onClick={() => setShowPurgeConfirm(false)}></div>
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-md w-full animate-slideUp">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-12 h-12 bg-orange-100 dark:bg-orange-900/30 rounded-full flex items-center justify-center flex-shrink-0">
+                  <AlertTriangle className="w-6 h-6 text-orange-600 dark:text-orange-400" />
+                </div>
+                <h3 className="text-xl font-bold text-gray-900 dark:text-white">Purge & Re-sync?</h3>
+              </div>
+              
+              <p className="text-gray-600 dark:text-gray-400 mb-6">
+                This will delete all your local transcriptions and fetch them again from AssemblyAI. This is useful to fix missing data or update metadata. This process is rate-limited and may take several minutes.
+              </p>
+              
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowPurgeConfirm(false)}
+                  className="flex-1 px-4 py-3 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl hover:bg-gray-300 dark:hover:bg-gray-600 transition-all font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handlePurgeAndResync}
+                  className="flex-1 px-4 py-3 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition-all font-medium flex items-center justify-center gap-2"
+                >
+                  <Trash2 className="w-5 h-5" />
+                  Purge & Re-sync
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Re-sync Progress Modal */}
+      {showResyncProgress && (
+        <>
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60]"></div>
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 max-w-lg w-full">
+              <div className="text-center mb-6">
+                {resyncProgress.phase === 'Complete' ? (
+                  <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full mx-auto mb-4 flex items-center justify-center">
+                    <Check className="w-8 h-8 text-green-600 dark:text-green-400" />
+                  </div>
+                ) : resyncProgress.phase === 'Error' ? (
+                  <div className="w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-full mx-auto mb-4 flex items-center justify-center">
+                    <X className="w-8 h-8 text-red-600 dark:text-red-400" />
+                  </div>
+                ) : (
+                  <Loader2 className="w-16 h-16 text-blue-600 mx-auto mb-4 animate-spin" />
+                )}
+                
+                <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+                  {resyncProgress.phase === 'Complete' ? 'Re-sync Complete!' : 
+                   resyncProgress.phase === 'Error' ? 'Re-sync Failed' :
+                   'Re-syncing Transcriptions'}
+                </h3>
+                <p className="text-gray-600 dark:text-gray-400">
+                  {resyncProgress.message}
+                </p>
+              </div>
+              
+              {resyncProgress.total > 0 && resyncProgress.phase !== 'Complete' && resyncProgress.phase !== 'Error' && (
+                <div className="mb-6">
+                  <div className="flex items-center justify-between mb-2 text-sm text-gray-600 dark:text-gray-400">
+                    <span>Progress</span>
+                    <span>{resyncProgress.current} / {resyncProgress.total}</span>
+                  </div>
+                  <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3 overflow-hidden">
+                    <div 
+                      className="bg-gradient-to-r from-blue-600 to-indigo-600 h-full transition-all duration-500 rounded-full"
+                      style={{ width: `${(resyncProgress.current / resyncProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+              
+              {(resyncProgress.phase === 'Complete' || resyncProgress.phase === 'Error') && (
+                <button
+                  onClick={() => setShowResyncProgress(false)}
+                  className="w-full px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all font-medium"
+                >
+                  Close
+                </button>
+              )}
             </div>
           </div>
         </>
