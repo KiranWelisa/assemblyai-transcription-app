@@ -5,12 +5,12 @@ import { generateTitle, generateFallbackTitle } from '../../../lib/gemini-queue'
 import { generatePreview } from '../../../lib/transcript-utils';
 
 /**
- * Sleep helper for rate limiting
+ * Sleep helper voor rate limiting
  */
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Fetch transcript IDs from AssemblyAI (light fetch, no full details)
+ * Fetch transcript IDs van AssemblyAI (lightweight, alleen IDs)
  */
 async function fetchAllTranscriptIds(assemblyAiKey) {
   let allIds = [];
@@ -28,13 +28,18 @@ async function fetchAllTranscriptIds(assemblyAiKey) {
     const data = await response.json();
     const transcripts = data.transcripts || [];
     
-    // Only collect IDs for this light fetch
-    allIds = allIds.concat(transcripts.map(t => t.id));
+    // Collect alleen de IDs en created dates voor deze lightweight fetch
+    allIds = allIds.concat(
+      transcripts.map(t => ({
+        id: t.id,
+        created: t.created // Bewaar ook de created date
+      }))
+    );
     
     url = data.page_details?.next_url;
     
     if (url) {
-      await sleep(300); // Lighter rate limiting for ID-only fetches
+      await sleep(300); // Lichte rate limiting voor ID-only fetches
     }
   }
   
@@ -42,10 +47,10 @@ async function fetchAllTranscriptIds(assemblyAiKey) {
 }
 
 /**
- * Fetch full transcript details with rate limiting
+ * Fetch full transcript details met rate limiting (max 8 seconden voor 5 transcripts)
  */
 async function fetchTranscriptDetails(transcriptId, assemblyAiKey) {
-  await sleep(1200); // 1.2 seconds between requests
+  await sleep(1200); // 1.2 seconden tussen requests
   
   const response = await fetch(
     `https://api.assemblyai.com/v2/transcript/${transcriptId}`,
@@ -61,8 +66,13 @@ async function fetchTranscriptDetails(transcriptId, assemblyAiKey) {
 }
 
 /**
- * Batch processing endpoint for Vercel Hobby plan (10s timeout limit)
- * Processes transcriptions in small batches to stay within timeout
+ * Batch processing endpoint voor Vercel Hobby plan (10s timeout limit)
+ * 
+ * Proces:
+ * - Batch 0: Purge database + haal alle transcript IDs op
+ * - Batch 1-N: Process 5 transcripts per batch (binnen 10s timeout)
+ * 
+ * Client orchestreert de batches via herhaalde API calls
  */
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -75,74 +85,81 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { assemblyAiKey, batch = 0, batchSize = 5 } = req.body;
+  const { assemblyAiKey, batch = 0, transcriptIds = [] } = req.body;
 
   if (!assemblyAiKey) {
     return res.status(400).json({ error: 'AssemblyAI API key is required' });
   }
 
   const userEmail = token.user.email;
+  const BATCH_SIZE = 5; // Conservatief: 5 transcripts per batch (max ~8 seconden)
 
   try {
     // ==========================================
     // BATCH 0: PURGE DATABASE & GET TOTAL COUNT
     // ==========================================
     if (batch === 0) {
-      console.log(`🗑️ Batch 0: Purging existing transcriptions for user: ${userEmail}`);
+      console.log(`🗑️ Batch 0: Purging existing transcriptions voor user: ${userEmail}`);
       
       const deleteResult = await prisma.transcription.deleteMany({
         where: { userEmail }
       });
-      console.log(`✅ Deleted ${deleteResult.count} existing transcriptions`);
+      console.log(`✅ Deleted ${deleteResult.count} bestaande transcriptions`);
 
-      // Fetch all transcript IDs (light operation)
-      console.log('📥 Fetching all transcript IDs from AssemblyAI...');
-      const allTranscriptIds = await fetchAllTranscriptIds(assemblyAiKey);
-      console.log(`✅ Found ${allTranscriptIds.length} completed transcripts`);
+      // Fetch alle transcript IDs (lightweight operation)
+      console.log('📥 Fetching all transcript IDs van AssemblyAI...');
+      const allTranscriptData = await fetchAllTranscriptIds(assemblyAiKey);
+      console.log(`✅ Found ${allTranscriptData.length} completed transcripts`);
 
-      if (allTranscriptIds.length === 0) {
+      if (allTranscriptData.length === 0) {
         return res.status(200).json({
           success: true,
           batch: 0,
           totalBatches: 0,
           synced: 0,
           total: 0,
-          message: 'No transcripts found in AssemblyAI',
+          message: 'Geen transcripts gevonden in AssemblyAI',
         });
       }
 
-      const totalBatches = Math.ceil(allTranscriptIds.length / batchSize);
+      const totalBatches = Math.ceil(allTranscriptData.length / BATCH_SIZE);
 
-      // Store IDs in a simple cache (in production, use Redis or similar)
-      // For now, we'll return them to the client and client sends them back
+      // Return IDs naar de client voor batch processing
       return res.status(200).json({
         success: true,
         batch: 0,
         totalBatches,
-        total: allTranscriptIds.length,
-        transcriptIds: allTranscriptIds,
-        message: `Database purged. Ready to sync ${allTranscriptIds.length} transcriptions in ${totalBatches} batches.`,
+        total: allTranscriptData.length,
+        transcriptData: allTranscriptData, // Include created dates
+        batchSize: BATCH_SIZE,
+        message: `Database purged. Klaar om ${allTranscriptData.length} transcriptions te syncen in ${totalBatches} batches.`,
       });
     }
 
     // ==========================================
-    // BATCH N: SYNC THIS BATCH OF TRANSCRIPTS
+    // BATCH N: SYNC DEZE BATCH VAN TRANSCRIPTS
     // ==========================================
-    const { transcriptIds } = req.body;
-    
     if (!transcriptIds || !Array.isArray(transcriptIds)) {
-      return res.status(400).json({ error: 'transcriptIds array is required for batch > 0' });
+      return res.status(400).json({ 
+        error: 'transcriptIds array is required voor batch > 0' 
+      });
     }
 
-    const startIdx = (batch - 1) * batchSize;
-    const endIdx = Math.min(startIdx + batchSize, transcriptIds.length);
-    const batchIds = transcriptIds.slice(startIdx, endIdx);
+    const startIdx = (batch - 1) * BATCH_SIZE;
+    const endIdx = Math.min(startIdx + BATCH_SIZE, transcriptIds.length);
+    const batchData = transcriptIds.slice(startIdx, endIdx);
 
     console.log(`🔄 Batch ${batch}: Processing transcripts ${startIdx + 1}-${endIdx} of ${transcriptIds.length}`);
 
     let syncedCount = 0;
+    const syncedIds = [];
 
-    for (const transcriptId of batchIds) {
+    for (const item of batchData) {
+      const transcriptId = typeof item === 'string' ? item : item.id;
+      const assemblyCreatedAt = typeof item === 'object' && item.created 
+        ? new Date(item.created) 
+        : null;
+
       try {
         const fullTranscript = await fetchTranscriptDetails(transcriptId, assemblyAiKey);
         
@@ -152,7 +169,7 @@ export default async function handler(req, res) {
         }
 
         const preview = generatePreview(fullTranscript);
-        const assemblyCreatedAt = fullTranscript.created ? new Date(fullTranscript.created) : null;
+        const createdAt = assemblyCreatedAt || (fullTranscript.created ? new Date(fullTranscript.created) : null);
 
         const transcription = await prisma.transcription.create({
           data: {
@@ -163,7 +180,7 @@ export default async function handler(req, res) {
             duration: fullTranscript.audio_duration,
             wordCount: fullTranscript.words?.length || 0,
             preview,
-            assemblyCreatedAt,
+            assemblyCreatedAt: createdAt,
             title: null,
             titleGenerating: true,
           },
@@ -172,15 +189,19 @@ export default async function handler(req, res) {
         // Queue title generation in background (fire and forget)
         generateTitle(fullTranscript).then(async (title) => {
           if (!title) {
-            title = generateFallbackTitle(transcription.fileName, transcription.language, transcription.duration);
+            title = generateFallbackTitle(
+              transcription.fileName, 
+              transcription.language, 
+              transcription.duration
+            );
           }
           await prisma.transcription.update({
             where: { id: transcription.id },
             data: { title, titleGenerating: false },
           });
-          console.log(`✅ Title generated for ${transcription.id}: "${title}"`);
+          console.log(`✅ Title generated voor ${transcription.id}: "${title}"`);
         }).catch(async (error) => {
-          console.error(`❌ Failed to generate title for ${transcription.id}:`, error);
+          console.error(`❌ Failed to generate title voor ${transcription.id}:`, error);
           await prisma.transcription.update({
             where: { id: transcription.id },
             data: { titleGenerating: false },
@@ -188,30 +209,33 @@ export default async function handler(req, res) {
         });
 
         syncedCount++;
+        syncedIds.push(transcriptId);
       } catch (error) {
         console.error(`❌ Error syncing ${transcriptId}:`, error.message);
       }
     }
 
-    const totalBatches = Math.ceil(transcriptIds.length / batchSize);
+    const totalBatches = Math.ceil(transcriptIds.length / BATCH_SIZE);
     const hasMore = batch < totalBatches;
 
-    console.log(`✅ Batch ${batch} complete: Synced ${syncedCount} transcriptions`);
+    console.log(`✅ Batch ${batch} compleet: Synced ${syncedCount} transcriptions`);
 
     return res.status(200).json({
       success: true,
       batch,
       totalBatches,
       synced: syncedCount,
+      syncedIds,
       total: transcriptIds.length,
       hasMore,
+      nextBatch: hasMore ? batch + 1 : null,
       message: hasMore 
-        ? `Batch ${batch}/${totalBatches} complete. Continue with next batch.`
-        : `All ${transcriptIds.length} transcriptions synced successfully!`,
+        ? `Batch ${batch}/${totalBatches} compleet. Ga door met volgende batch.`
+        : `Alle ${transcriptIds.length} transcriptions gesynchroniseerd!`,
     });
 
   } catch (error) {
-    console.error('❌ Error during batch processing:', error);
+    console.error('❌ Error tijdens batch processing:', error);
     return res.status(500).json({ 
       error: 'Failed to process batch',
       details: error.message 
