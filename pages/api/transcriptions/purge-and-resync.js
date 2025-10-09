@@ -62,6 +62,100 @@ async function fetchTranscriptDetails(transcriptId, assemblyAiKey) {
   return await response.json();
 }
 
+/**
+ * Background function that handles the entire purge and re-sync process
+ * This runs independently after the API response is sent
+ */
+async function runPurgeAndResyncInBackground(userEmail, assemblyAiKey) {
+  try {
+    console.log(`🗑️ Starting purge and re-sync for user: ${userEmail}`);
+    
+    // ==========================================
+    // PHASE 1: PURGE
+    // ==========================================
+    console.log('📋 Phase 1: Purging existing transcriptions...');
+    const deleteResult = await prisma.transcription.deleteMany({
+      where: { userEmail }
+    });
+    console.log(`✅ Deleted ${deleteResult.count} existing transcriptions`);
+
+    // ==========================================
+    // PHASE 2: FETCH ALL TRANSCRIPTS
+    // ==========================================
+    console.log('📥 Phase 2: Fetching all transcripts from AssemblyAI...');
+    const transcriptsList = await fetchAllTranscripts(assemblyAiKey);
+    console.log(`✅ Found ${transcriptsList.length} completed transcripts`);
+
+    if (transcriptsList.length === 0) {
+      console.log('No transcripts found in AssemblyAI. Process finished.');
+      return;
+    }
+
+    // ==========================================
+    // PHASE 3 & 4: SYNC TRANSCRIPTS AND GENERATE TITLES
+    // Combined for efficiency - generate titles immediately after creating records
+    // ==========================================
+    console.log('🔄 Phase 3: Syncing transcripts and queueing title generation...');
+    
+    for (let i = 0; i < transcriptsList.length; i++) {
+      const transcriptSummary = transcriptsList[i];
+      console.log(`📝 Syncing ${i + 1}/${transcriptsList.length}: ${transcriptSummary.id}`);
+
+      try {
+        const fullTranscript = await fetchTranscriptDetails(transcriptSummary.id, assemblyAiKey);
+        if (!fullTranscript) {
+          console.warn(`⚠️ Skipping ${transcriptSummary.id}: Failed to fetch details`);
+          continue;
+        }
+
+        const preview = generatePreview(fullTranscript);
+        const assemblyCreatedAt = fullTranscript.created ? new Date(fullTranscript.created) : null;
+
+        const transcription = await prisma.transcription.create({
+          data: {
+            assemblyAiId: fullTranscript.id,
+            userEmail,
+            fileName: null,
+            language: fullTranscript.language_code,
+            duration: fullTranscript.audio_duration,
+            wordCount: fullTranscript.words?.length || 0,
+            preview,
+            assemblyCreatedAt,
+            title: null,
+            titleGenerating: true,
+          },
+        });
+
+        // Queue title generation immediately after creating the record
+        generateTitle(fullTranscript).then(async (title) => {
+          if (!title) {
+            title = generateFallbackTitle(transcription.fileName, transcription.language, transcription.duration);
+          }
+          await prisma.transcription.update({
+            where: { id: transcription.id },
+            data: { title, titleGenerating: false },
+          });
+          console.log(`✅ Title generated for ${transcription.id}: "${title}"`);
+        }).catch(async (error) => {
+          console.error(`❌ Failed to generate title for ${transcription.id}:`, error);
+          await prisma.transcription.update({
+            where: { id: transcription.id },
+            data: { titleGenerating: false },
+          });
+        });
+
+      } catch (error) {
+        console.error(`❌ Error syncing ${transcriptSummary.id}:`, error.message);
+      }
+    }
+    
+    console.log(`🎉 Purge and re-sync process complete!`);
+
+  } catch (error) {
+    console.error('❌ Error during purge and re-sync background process:', error);
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -81,144 +175,14 @@ export default async function handler(req, res) {
 
   const userEmail = token.user.email;
 
-  try {
-    console.log(`🗑️  Starting purge and re-sync for user: ${userEmail}`);
-    
-    // ==========================================
-    // PHASE 1: PURGE
-    // ==========================================
-    console.log('📋 Phase 1: Purging existing transcriptions...');
-    const deleteResult = await prisma.transcription.deleteMany({
-      where: { userEmail }
-    });
-    console.log(`✅ Deleted ${deleteResult.count} existing transcriptions`);
+  // *** FIX: Run the long process in the background and respond immediately ***
+  // No await here - let it run independently
+  runPurgeAndResyncInBackground(userEmail, assemblyAiKey);
 
-    // ==========================================
-    // PHASE 2: FETCH ALL TRANSCRIPTS
-    // ==========================================
-    console.log('📥 Phase 2: Fetching all transcripts from AssemblyAI...');
-    const transcriptsList = await fetchAllTranscripts(assemblyAiKey);
-    console.log(`✅ Found ${transcriptsList.length} completed transcripts`);
-
-    if (transcriptsList.length === 0) {
-      return res.status(200).json({
-        success: true,
-        purged: deleteResult.count,
-        synced: 0,
-        total: 0,
-        message: 'No transcripts found in AssemblyAI',
-      });
-    }
-
-    // ==========================================
-    // PHASE 3: SYNC TRANSCRIPTS
-    // ==========================================
-    console.log('🔄 Phase 3: Syncing transcripts with full details...');
-    const syncedTranscriptions = [];
-    let syncedCount = 0;
-
-    for (let i = 0; i < transcriptsList.length; i++) {
-      const transcript = transcriptsList[i];
-      
-      console.log(`📝 Syncing ${i + 1}/${transcriptsList.length}: ${transcript.id}`);
-
-      try {
-        // Fetch full transcript details (with rate limiting)
-        const fullTranscript = await fetchTranscriptDetails(transcript.id, assemblyAiKey);
-        
-        if (!fullTranscript) {
-          console.warn(`⚠️  Skipping ${transcript.id}: Failed to fetch details`);
-          continue;
-        }
-
-        // Generate preview from utterances
-        const preview = generatePreview(fullTranscript);
-
-        // Get AssemblyAI created date
-        const assemblyCreatedAt = fullTranscript.created 
-          ? new Date(fullTranscript.created) 
-          : null;
-
-        // Create transcription entry
-        const transcription = await prisma.transcription.create({
-          data: {
-            assemblyAiId: fullTranscript.id,
-            userEmail,
-            fileName: null, // We don't have filename from sync
-            language: fullTranscript.language_code,
-            duration: fullTranscript.audio_duration,
-            wordCount: fullTranscript.words?.length || 0,
-            preview,
-            assemblyCreatedAt,
-            title: null,
-            titleGenerating: true,
-          },
-        });
-
-        syncedTranscriptions.push({ transcription, fullTranscript });
-        syncedCount++;
-
-        console.log(`✅ Synced ${syncedCount}/${transcriptsList.length}`);
-
-      } catch (error) {
-        console.error(`❌ Error syncing ${transcript.id}:`, error.message);
-        // Continue with next transcript
-      }
-    }
-
-    console.log(`✅ Phase 3 complete: Synced ${syncedCount} transcriptions`);
-
-    // ==========================================
-    // PHASE 4: QUEUE TITLE GENERATION
-    // ==========================================
-    console.log('🤖 Phase 4: Queueing title generation (rate-limited)...');
-    
-    // Queue all title generation tasks in background
-    // The gemini-queue will handle rate limiting (15 requests/min)
-    Promise.all(
-      syncedTranscriptions.map(async ({ transcription, fullTranscript }) => {
-        try {
-          let title = await generateTitle(fullTranscript);
-          
-          if (!title) {
-            title = generateFallbackTitle(
-              transcription.fileName,
-              transcription.language,
-              transcription.duration
-            );
-          }
-
-          await prisma.transcription.update({
-            where: { id: transcription.id },
-            data: { title, titleGenerating: false },
-          });
-
-          console.log(`✅ Title generated: "${title}"`);
-        } catch (error) {
-          console.error(`❌ Failed to generate title for ${transcription.id}:`, error);
-          await prisma.transcription.update({
-            where: { id: transcription.id },
-            data: { titleGenerating: false },
-          });
-        }
-      })
-    ).catch(console.error);
-
-    console.log(`🎉 Purge and re-sync complete!`);
-
-    return res.status(200).json({
-      success: true,
-      purged: deleteResult.count,
-      synced: syncedCount,
-      total: transcriptsList.length,
-      message: `Successfully purged ${deleteResult.count} and synced ${syncedCount} transcriptions. Titles are being generated in the background.`,
-    });
-
-  } catch (error) {
-    console.error('❌ Error during purge and re-sync:', error);
-    return res.status(500).json({ 
-      error: 'Failed to purge and re-sync',
-      details: error.message 
-    });
-  }
+  // Return an immediate success response to the client
+  // 202 Accepted indicates the request has been accepted for processing
+  return res.status(202).json({ 
+    success: true,
+    message: 'Purge and re-sync process has been started in the background. Your transcriptions will appear as they are processed.',
+  });
 }
