@@ -33,11 +33,13 @@ const AssemblyAITranscription = () => {
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState({ synced: 0, total: 0 });
   const [copied, setCopied] = useState(false);
+  const [processingTitles, setProcessingTitles] = useState(false);
   
   const pickerLoadedRef = useRef(false);
   const oneTapRef = useRef(false);
   const titlePollingRef = useRef(null);
   const backgroundPollingRef = useRef(null);
+  const titleProcessedRef = useRef(false); // Voorkom dubbele calls
 
   // Dark mode
   useEffect(() => {
@@ -68,6 +70,82 @@ const AssemblyAITranscription = () => {
       }
     }
   }, [session]);
+
+  // 🆕 AUTO-PROCESS PENDING TITLES wanneer component laadt
+  useEffect(() => {
+    // Alleen uitvoeren als:
+    // 1. We een API key hebben
+    // 2. We transcripties hebben geladen
+    // 3. We dit nog niet hebben gedaan (voorkom dubbele calls)
+    if (apiKey && pastTranscriptions.length > 0 && !titleProcessedRef.current) {
+      const untitledCount = pastTranscriptions.filter(t => t.titleGenerating === true).length;
+      
+      if (untitledCount > 0) {
+        console.log(`🔍 Found ${untitledCount} transcriptions without titles, starting background processing...`);
+        titleProcessedRef.current = true; // Mark als verwerkt
+        processPendingTitles();
+      }
+    }
+  }, [apiKey, pastTranscriptions]);
+
+  // 🆕 PROCES PENDING TITLES via nieuwe endpoint
+  const processPendingTitles = async () => {
+    if (!apiKey || processingTitles) return;
+    
+    setProcessingTitles(true);
+    
+    try {
+      const response = await fetch('/api/transcriptions/process-titles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          assemblyAiKey: apiKey,
+          maxItems: 10 // Process maximaal 10 items per keer
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to process titles');
+      }
+
+      const data = await response.json();
+      console.log(`✅ Queued ${data.queued} titles for background generation`);
+      
+      // Start polling om updates te zien
+      if (data.queued > 0) {
+        startTitleUpdatePolling();
+      }
+    } catch (error) {
+      console.error('Error processing pending titles:', error);
+    } finally {
+      setProcessingTitles(false);
+    }
+  };
+
+  // 🆕 POLL voor title updates (lichtere polling dan background polling)
+  const startTitleUpdatePolling = () => {
+    if (titlePollingRef.current) clearInterval(titlePollingRef.current);
+    
+    let pollCount = 0;
+    const maxPolls = 30; // Max 1 minuut polling (30 * 2 sec)
+    
+    titlePollingRef.current = setInterval(async () => {
+      pollCount++;
+      
+      // Refresh transcriptions lijst
+      await fetchPastTranscriptions();
+      
+      // Check of er nog untitled transcriptions zijn
+      const untitledCount = pastTranscriptions.filter(t => t.titleGenerating === true).length;
+      
+      // Stop als alles verwerkt is of max bereikt
+      if (untitledCount === 0 || pollCount >= maxPolls) {
+        clearInterval(titlePollingRef.current);
+        titlePollingRef.current = null;
+        console.log('✅ Title polling stopped');
+      }
+    }, 2000); // Poll elke 2 seconden
+  };
 
   // Session refresh
   useEffect(() => {
@@ -132,6 +210,7 @@ const AssemblyAITranscription = () => {
       localStorage.setItem('assemblyai_api_key', apiKeyInput);
       setApiKey(apiKeyInput);
       setApiKeyInput('');
+      titleProcessedRef.current = false; // Reset voor nieuwe API key
       fetchPastTranscriptions();
       setShowSettings(false);
     }
@@ -141,6 +220,7 @@ const AssemblyAITranscription = () => {
     localStorage.removeItem('assemblyai_api_key');
     setApiKey('');
     setPastTranscriptions([]);
+    titleProcessedRef.current = false;
   };
 
   // Google Picker
@@ -237,6 +317,9 @@ const AssemblyAITranscription = () => {
       
       await fetchPastTranscriptions();
       
+      // Reset title processing flag zodat nieuwe items verwerkt worden
+      titleProcessedRef.current = false;
+      
       setTimeout(() => setSyncing(false), 2000);
     } catch (error) {
       console.error('Sync error:', error);
@@ -251,7 +334,7 @@ const AssemblyAITranscription = () => {
     
     backgroundPollingRef.current = setInterval(() => {
       fetchPastTranscriptions();
-    }, 3000); // Poll every 3 seconds during re-sync
+    }, 3000);
   };
 
   const stopBackgroundPolling = () => {
@@ -269,10 +352,9 @@ const AssemblyAITranscription = () => {
     setShowSettings(false);
     setShowResyncProgress(true);
     setResyncProgress({ current: 0, total: 0, currentBatch: 0, totalBatches: 0 });
+    titleProcessedRef.current = false; // Reset voor nieuwe sync
 
     try {
-      // BATCH 0: Purge en fetch IDs
-      console.log('🗑️ Starting Batch 0: Purge and fetch IDs...');
       const batch0Response = await fetch('/api/transcriptions/purge-and-resync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -305,10 +387,8 @@ const AssemblyAITranscription = () => {
         totalBatches 
       });
 
-      // Start background polling om nieuwe transcripties te tonen
       startBackgroundPolling();
 
-      // BATCH 1-N: Process elke batch sequentieel
       let totalSynced = 0;
 
       for (let batchNum = 1; batchNum <= totalBatches; batchNum++) {
@@ -332,7 +412,6 @@ const AssemblyAITranscription = () => {
         if (!batchResponse.ok) {
           const errorData = await batchResponse.json();
           console.error(`❌ Batch ${batchNum} failed:`, errorData.error);
-          // Continue met volgende batch ondanks error
           continue;
         }
 
@@ -346,22 +425,16 @@ const AssemblyAITranscription = () => {
 
         console.log(`✅ Batch ${batchNum}/${totalBatches} compleet: ${batchData.synced} transcripties gesynchroniseerd`);
 
-        // Refresh de lijst na elke batch
         await fetchPastTranscriptions();
 
-        // Kleine delay tussen batches voor betere UX
         if (batchNum < totalBatches) {
           await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
 
-      // Stop background polling
       stopBackgroundPolling();
-
-      // Final refresh
       await fetchPastTranscriptions();
 
-      // Toon success message
       setTimeout(() => {
         setShowResyncProgress(false);
         setResyncProgress({ current: 0, total: 0, currentBatch: 0, totalBatches: 0 });
@@ -399,34 +472,6 @@ const AssemblyAITranscription = () => {
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
     throw new Error("Transcription timed out.");
-  };
-
-  const startTitlePolling = (transcriptionId) => {
-    if (titlePollingRef.current) clearInterval(titlePollingRef.current);
-    titlePollingRef.current = setInterval(async () => {
-      try {
-        const response = await fetch('/api/transcriptions');
-        if (!response.ok) return;
-        const data = await response.json();
-        const updated = data.transcriptions.find(t => t.id === transcriptionId);
-        if (updated && !updated.titleGenerating) {
-          setTranscriptionTitle(updated.title || 'Untitled Transcription');
-          setTitleGenerating(false);
-          clearInterval(titlePollingRef.current);
-          titlePollingRef.current = null;
-          fetchPastTranscriptions();
-        }
-      } catch (error) {
-        console.error('Error polling for title:', error);
-      }
-    }, 2000);
-    setTimeout(() => {
-      if (titlePollingRef.current) {
-        clearInterval(titlePollingRef.current);
-        titlePollingRef.current = null;
-        setTitleGenerating(false);
-      }
-    }, 30000);
   };
 
   const startTranscription = async () => {
@@ -505,7 +550,7 @@ const AssemblyAITranscription = () => {
             body: JSON.stringify({ transcriptionId: transcription.id, transcript: completedTranscript }),
           });
 
-          startTitlePolling(transcription.id);
+          startTitleUpdatePolling();
           fetchPastTranscriptions();
         }
       } catch (dbError) {
