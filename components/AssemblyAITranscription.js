@@ -11,7 +11,8 @@ const AssemblyAITranscription = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [showPurgeConfirm, setShowPurgeConfirm] = useState(false);
-  const [showResyncNotification, setShowResyncNotification] = useState(false);
+  const [showResyncProgress, setShowResyncProgress] = useState(false);
+  const [resyncProgress, setResyncProgress] = useState({ current: 0, total: 0, currentBatch: 0, totalBatches: 0 });
   const [selectedTranscript, setSelectedTranscript] = useState(null);
   const [audioUrl, setAudioUrl] = useState('');
   const [transcriptionStatus, setTranscriptionStatus] = useState('idle');
@@ -250,52 +251,129 @@ const AssemblyAITranscription = () => {
     
     backgroundPollingRef.current = setInterval(() => {
       fetchPastTranscriptions();
-    }, 5000); // Poll every 5 seconds
-    
-    // Stop polling after 10 minutes
-    setTimeout(() => {
-      if (backgroundPollingRef.current) {
-        clearInterval(backgroundPollingRef.current);
-        backgroundPollingRef.current = null;
-      }
-    }, 10 * 60 * 1000);
+    }, 3000); // Poll every 3 seconds during re-sync
   };
 
-  // Purge and Re-sync
+  const stopBackgroundPolling = () => {
+    if (backgroundPollingRef.current) {
+      clearInterval(backgroundPollingRef.current);
+      backgroundPollingRef.current = null;
+    }
+  };
+
+  // Client-side Batch Orchestration voor Purge & Re-sync
   const handlePurgeAndResync = async () => {
     if (!apiKey) return;
     
     setShowPurgeConfirm(false);
     setShowSettings(false);
-    
+    setShowResyncProgress(true);
+    setResyncProgress({ current: 0, total: 0, currentBatch: 0, totalBatches: 0 });
+
     try {
-      const response = await fetch('/api/transcriptions/purge-and-resync', {
+      // BATCH 0: Purge en fetch IDs
+      console.log('🗑️ Starting Batch 0: Purge and fetch IDs...');
+      const batch0Response = await fetch('/api/transcriptions/purge-and-resync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assemblyAiKey: apiKey }),
+        body: JSON.stringify({ 
+          assemblyAiKey: apiKey, 
+          batch: 0 
+        }),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Purge and re-sync failed');
+      if (!batch0Response.ok) {
+        const errorData = await batch0Response.json();
+        throw new Error(errorData.error || 'Failed to start purge and re-sync');
       }
 
-      const data = await response.json();
+      const batch0Data = await batch0Response.json();
+      const { transcriptData, totalBatches, total } = batch0Data;
+
+      if (total === 0) {
+        setShowResyncProgress(false);
+        setError('Geen transcripties gevonden in AssemblyAI');
+        return;
+      }
+
+      console.log(`✅ Batch 0 compleet. Gevonden: ${total} transcripties in ${totalBatches} batches`);
       
-      // Show notification that process has started
-      setShowResyncNotification(true);
-      
-      // Start background polling to update UI as transcriptions appear
+      setResyncProgress({ 
+        current: 0, 
+        total, 
+        currentBatch: 0, 
+        totalBatches 
+      });
+
+      // Start background polling om nieuwe transcripties te tonen
       startBackgroundPolling();
-      
-      // Auto-hide notification after 8 seconds
+
+      // BATCH 1-N: Process elke batch sequentieel
+      let totalSynced = 0;
+
+      for (let batchNum = 1; batchNum <= totalBatches; batchNum++) {
+        console.log(`🔄 Starting Batch ${batchNum}/${totalBatches}...`);
+        
+        setResyncProgress(prev => ({ 
+          ...prev, 
+          currentBatch: batchNum 
+        }));
+
+        const batchResponse = await fetch('/api/transcriptions/purge-and-resync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            assemblyAiKey: apiKey, 
+            batch: batchNum,
+            transcriptIds: transcriptData 
+          }),
+        });
+
+        if (!batchResponse.ok) {
+          const errorData = await batchResponse.json();
+          console.error(`❌ Batch ${batchNum} failed:`, errorData.error);
+          // Continue met volgende batch ondanks error
+          continue;
+        }
+
+        const batchData = await batchResponse.json();
+        totalSynced += batchData.synced;
+
+        setResyncProgress(prev => ({ 
+          ...prev, 
+          current: totalSynced 
+        }));
+
+        console.log(`✅ Batch ${batchNum}/${totalBatches} compleet: ${batchData.synced} transcripties gesynchroniseerd`);
+
+        // Refresh de lijst na elke batch
+        await fetchPastTranscriptions();
+
+        // Kleine delay tussen batches voor betere UX
+        if (batchNum < totalBatches) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+
+      // Stop background polling
+      stopBackgroundPolling();
+
+      // Final refresh
+      await fetchPastTranscriptions();
+
+      // Toon success message
       setTimeout(() => {
-        setShowResyncNotification(false);
-      }, 8000);
+        setShowResyncProgress(false);
+        setResyncProgress({ current: 0, total: 0, currentBatch: 0, totalBatches: 0 });
+      }, 2000);
+
+      console.log(`🎉 Re-sync compleet! ${totalSynced}/${total} transcripties gesynchroniseerd`);
 
     } catch (error) {
-      console.error('Purge and re-sync error:', error);
+      console.error('❌ Purge and re-sync error:', error);
       setError(error.message || 'An error occurred during purge and re-sync');
+      setShowResyncProgress(false);
+      stopBackgroundPolling();
     }
   };
 
@@ -879,7 +957,7 @@ const AssemblyAITranscription = () => {
                 )}
                 
                 <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
-                  Purge & Re-sync will delete all your local transcriptions and fetch them again from AssemblyAI with updated metadata.
+                  Purge & Re-sync verwijdert al je lokale transcripties en haalt ze opnieuw op van AssemblyAI met bijgewerkte metadata.
                 </p>
               </div>
               
@@ -939,14 +1017,14 @@ const AssemblyAITranscription = () => {
               </div>
               
               <p className="text-gray-600 dark:text-gray-400 mb-4">
-                This will delete all your local transcriptions and fetch them again from AssemblyAI. The process will run in the background, and transcriptions will appear as they're synced.
+                Dit verwijdert alle lokale transcripties en haalt ze opnieuw op van AssemblyAI. Je ziet real-time voortgang terwijl transcripties worden gesynchroniseerd.
               </p>
               
               <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-3 mb-6">
                 <p className="text-sm text-blue-900 dark:text-blue-100 flex items-start gap-2">
                   <RefreshCw className="w-4 h-4 mt-0.5 flex-shrink-0" />
                   <span>
-                    The process continues on the server even if you close this page. Transcriptions and titles will automatically appear as they're processed.
+                    Het proces gebeurt in kleine batches om binnen de 10 seconden timeout van Vercel Hobby plan te blijven. Titels worden automatisch gegenereerd zodra transcripties zijn gesynchroniseerd.
                   </span>
                 </p>
               </div>
@@ -971,25 +1049,34 @@ const AssemblyAITranscription = () => {
         </>
       )}
 
-      {/* Re-sync Notification Toast */}
-      {showResyncNotification && (
-        <div className="fixed bottom-6 right-6 bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-4 z-50 border border-gray-200 dark:border-gray-700 max-w-md animate-slideUp">
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center flex-shrink-0">
-              <RefreshCw className="w-5 h-5 text-blue-600 dark:text-blue-400 animate-spin" />
+      {/* Re-sync Progress Toast */}
+      {showResyncProgress && (
+        <div className="fixed bottom-6 right-6 bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 z-50 border border-gray-200 dark:border-gray-700 max-w-md animate-slideUp">
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center flex-shrink-0">
+              <RefreshCw className="w-6 h-6 text-blue-600 dark:text-blue-400 animate-spin" />
             </div>
             <div className="flex-1">
-              <h4 className="font-semibold text-gray-900 dark:text-white mb-1">Re-sync Started</h4>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Your transcriptions are being re-synced in the background. They'll appear automatically as they're processed.
-              </p>
+              <h4 className="font-semibold text-gray-900 dark:text-white mb-2">Re-syncing transcriptions...</h4>
+              
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400">
+                  <span>Batch {resyncProgress.currentBatch} van {resyncProgress.totalBatches}</span>
+                  <span className="font-medium">{resyncProgress.current} / {resyncProgress.total}</span>
+                </div>
+                
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                  <div 
+                    className="bg-gradient-to-r from-blue-500 to-indigo-600 h-full transition-all duration-300 ease-out"
+                    style={{ width: `${resyncProgress.total > 0 ? (resyncProgress.current / resyncProgress.total) * 100 : 0}%` }}
+                  ></div>
+                </div>
+                
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Transcripties verschijnen automatisch terwijl ze worden gesynchroniseerd
+                </p>
+              </div>
             </div>
-            <button
-              onClick={() => setShowResyncNotification(false)}
-              className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-            >
-              <X className="w-4 h-4 text-gray-500" />
-            </button>
           </div>
         </div>
       )}
