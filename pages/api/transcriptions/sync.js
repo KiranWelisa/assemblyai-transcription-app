@@ -1,7 +1,7 @@
 // pages/api/transcriptions/sync.js
 import { prisma } from '../../../lib/prisma';
 import { getToken } from 'next-auth/jwt';
-import { generateTitle, generateFallbackTitle } from '../../../lib/gemini';
+import { generateTitle, generateFallbackTitle } from '../../../lib/gemini-queue';
 import { generatePreview } from '../../../lib/transcript-utils';
 
 export default async function handler(req, res) {
@@ -36,7 +36,7 @@ export default async function handler(req, res) {
     const data = await response.json();
     const transcripts = data.transcripts || [];
 
-    console.log(`Found ${transcripts.length} completed transcripts from AssemblyAI`);
+    console.log(`📥 Found ${transcripts.length} completed transcripts from AssemblyAI`);
 
     let syncedCount = 0;
     let skippedCount = 0;
@@ -83,10 +83,13 @@ export default async function handler(req, res) {
       }
     }
 
-    console.log(`Synced ${syncedCount} new transcripts, skipped ${skippedCount} existing`);
+    console.log(`✅ Synced ${syncedCount} new transcripts, skipped ${skippedCount} existing`);
 
-    // Generate titles in background (don't wait)
+    // Generate titles in background with rate limiting (don't wait for completion)
     if (newTranscriptions.length > 0) {
+      console.log(`🎯 Queuing ${newTranscriptions.length} title generation tasks (rate limited to 15/min)`);
+      
+      // Queue all title generation tasks - the queue will handle rate limiting
       Promise.all(
         newTranscriptions.map(async ({ transcription, transcript }) => {
           try {
@@ -98,6 +101,7 @@ export default async function handler(req, res) {
             if (fullTranscriptResponse.ok) {
               const fullTranscript = await fullTranscriptResponse.json();
               
+              // This will be queued and rate-limited automatically
               let title = await generateTitle(fullTranscript);
               
               if (!title) {
@@ -113,10 +117,10 @@ export default async function handler(req, res) {
                 data: { title, titleGenerating: false },
               });
 
-              console.log(`Generated title for ${transcription.id}: ${title}`);
+              console.log(`✅ Title generated: "${title}"`);
             }
           } catch (error) {
-            console.error(`Failed to generate title for ${transcription.id}:`, error);
+            console.error(`❌ Failed to generate title for ${transcription.id}:`, error);
             await prisma.transcription.update({
               where: { id: transcription.id },
               data: { titleGenerating: false },
@@ -131,6 +135,7 @@ export default async function handler(req, res) {
       synced: syncedCount,
       skipped: skippedCount,
       total: transcripts.length,
+      message: syncedCount > 0 ? 'Titles will be generated in the background (rate limited)' : null,
     });
 
   } catch (error) {
