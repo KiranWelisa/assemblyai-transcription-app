@@ -1,7 +1,7 @@
 // pages/api/transcriptions/generate-title.js
 import { prisma } from '../../../lib/prisma';
 import { getToken } from 'next-auth/jwt';
-import { generateTitle, generateFallbackTitle } from '../../../lib/gemini';
+import { generateTitle, generateFallbackTitle } from '../../../lib/gemini-queue';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -30,11 +30,14 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: 'Transcription not found' });
     }
 
-    // Try to generate title with Gemini
+    console.log(`🎯 Generating title for transcription ${transcriptionId}...`);
+
+    // Try to generate title with Gemini (queued with rate limiting)
     let title = await generateTitle(transcript);
     
     // Fallback to basic title if Gemini fails
     if (!title) {
+      console.log('⚠️ Gemini failed, using fallback title');
       title = generateFallbackTitle(
         existingTranscription.fileName, 
         existingTranscription.language,
@@ -51,6 +54,7 @@ export default async function handler(req, res) {
       },
     });
 
+    console.log(`✅ Title generated: "${title}"`);
     return res.status(200).json({ transcription: updatedTranscription });
   } catch (error) {
     console.error('Error generating title:', error);
