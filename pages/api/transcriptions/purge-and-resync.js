@@ -14,14 +14,9 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
  */
 async function fetchAllTranscripts(assemblyAiKey) {
   let allTranscripts = [];
-  let hasMore = true;
-  let beforeId = null;
+  let url = 'https://api.assemblyai.com/v2/transcript?limit=100&status=completed';
   
-  while (hasMore) {
-    const url = beforeId 
-      ? `https://api.assemblyai.com/v2/transcript?limit=100&status=completed&before_id=${beforeId}`
-      : `https://api.assemblyai.com/v2/transcript?limit=100&status=completed`;
-    
+  while (url) {
     const response = await fetch(url, {
       headers: { 'Authorization': assemblyAiKey }
     });
@@ -35,17 +30,11 @@ async function fetchAllTranscripts(assemblyAiKey) {
     
     allTranscripts = allTranscripts.concat(transcripts);
     
-    // Check if there are more pages
-    if (data.page_details?.next_url) {
-      // Extract the before_id from the next_url
-      const nextUrl = new URL(data.page_details.next_url);
-      beforeId = nextUrl.searchParams.get('before_id');
-    } else {
-      hasMore = false;
-    }
+    // Use the next_url directly from the API response
+    url = data.page_details?.next_url;
     
     // Rate limiting: wait 500ms between pagination requests
-    if (hasMore) {
+    if (url) {
       await sleep(500);
     }
   }
