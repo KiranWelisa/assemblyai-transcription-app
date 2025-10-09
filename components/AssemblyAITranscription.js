@@ -11,8 +11,7 @@ const AssemblyAITranscription = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [showPurgeConfirm, setShowPurgeConfirm] = useState(false);
-  const [showResyncProgress, setShowResyncProgress] = useState(false);
-  const [resyncProgress, setResyncProgress] = useState({ phase: '', current: 0, total: 0, message: '' });
+  const [showResyncNotification, setShowResyncNotification] = useState(false);
   const [selectedTranscript, setSelectedTranscript] = useState(null);
   const [audioUrl, setAudioUrl] = useState('');
   const [transcriptionStatus, setTranscriptionStatus] = useState('idle');
@@ -37,7 +36,7 @@ const AssemblyAITranscription = () => {
   const pickerLoadedRef = useRef(false);
   const oneTapRef = useRef(false);
   const titlePollingRef = useRef(null);
-  const resyncPollingRef = useRef(null);
+  const backgroundPollingRef = useRef(null);
 
   // Dark mode
   useEffect(() => {
@@ -245,14 +244,29 @@ const AssemblyAITranscription = () => {
     }
   };
 
+  // Background polling for new transcriptions
+  const startBackgroundPolling = () => {
+    if (backgroundPollingRef.current) clearInterval(backgroundPollingRef.current);
+    
+    backgroundPollingRef.current = setInterval(() => {
+      fetchPastTranscriptions();
+    }, 5000); // Poll every 5 seconds
+    
+    // Stop polling after 10 minutes
+    setTimeout(() => {
+      if (backgroundPollingRef.current) {
+        clearInterval(backgroundPollingRef.current);
+        backgroundPollingRef.current = null;
+      }
+    }, 10 * 60 * 1000);
+  };
+
   // Purge and Re-sync
   const handlePurgeAndResync = async () => {
     if (!apiKey) return;
     
     setShowPurgeConfirm(false);
-    setShowResyncProgress(true);
     setShowSettings(false);
-    setResyncProgress({ phase: 'Starting', current: 0, total: 0, message: 'Initializing purge and re-sync...' });
     
     try {
       const response = await fetch('/api/transcriptions/purge-and-resync', {
@@ -268,32 +282,20 @@ const AssemblyAITranscription = () => {
 
       const data = await response.json();
       
-      setResyncProgress({
-        phase: 'Complete',
-        current: data.synced,
-        total: data.total,
-        message: data.message
-      });
-
-      await fetchPastTranscriptions();
+      // Show notification that process has started
+      setShowResyncNotification(true);
       
+      // Start background polling to update UI as transcriptions appear
+      startBackgroundPolling();
+      
+      // Auto-hide notification after 8 seconds
       setTimeout(() => {
-        setShowResyncProgress(false);
-      }, 3000);
+        setShowResyncNotification(false);
+      }, 8000);
 
     } catch (error) {
       console.error('Purge and re-sync error:', error);
-      setResyncProgress({
-        phase: 'Error',
-        current: 0,
-        total: 0,
-        message: error.message || 'An error occurred during purge and re-sync'
-      });
-      
-      setTimeout(() => {
-        setShowResyncProgress(false);
-        setError(error.message);
-      }, 3000);
+      setError(error.message || 'An error occurred during purge and re-sync');
     }
   };
 
@@ -301,7 +303,7 @@ const AssemblyAITranscription = () => {
   useEffect(() => {
     return () => {
       if (titlePollingRef.current) clearInterval(titlePollingRef.current);
-      if (resyncPollingRef.current) clearInterval(resyncPollingRef.current);
+      if (backgroundPollingRef.current) clearInterval(backgroundPollingRef.current);
     };
   }, []);
 
@@ -541,20 +543,13 @@ const AssemblyAITranscription = () => {
     URL.revokeObjectURL(url);
   };
 
-  // Filter and sort - UPDATED: Only show fully synced transcriptions
+  // Filter and sort
   const filteredTranscriptions = pastTranscriptions
     .filter(t => {
-      // Only show transcriptions with essential data
-      // Duration and preview are required (wordCount can be 0 for short files)
       if (t.duration === null || t.duration === undefined) return false;
       if (!t.preview && t.preview !== '') return false;
-      
-      // Apply search filter
       if (searchQuery && !t.title?.toLowerCase().includes(searchQuery.toLowerCase())) return false;
-      
-      // Apply tag filter
       if (filterTag && !t.tags?.includes(filterTag) && getLanguageTag(t.language) !== filterTag) return false;
-      
       return true;
     })
     .sort((a, b) => {
@@ -944,14 +939,14 @@ const AssemblyAITranscription = () => {
               </div>
               
               <p className="text-gray-600 dark:text-gray-400 mb-4">
-                This will delete all your local transcriptions and fetch them again from AssemblyAI. This is useful to fix missing data or update metadata.
+                This will delete all your local transcriptions and fetch them again from AssemblyAI. The process will run in the background, and transcriptions will appear as they're synced.
               </p>
               
               <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-3 mb-6">
                 <p className="text-sm text-blue-900 dark:text-blue-100 flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <RefreshCw className="w-4 h-4 mt-0.5 flex-shrink-0" />
                   <span>
-                    <strong>Note:</strong> The process will continue on the server even if you close this tab. Transcriptions will appear as they're processed.
+                    The process continues on the server even if you close this page. Transcriptions and titles will automatically appear as they're processed.
                   </span>
                 </p>
               </div>
@@ -976,69 +971,27 @@ const AssemblyAITranscription = () => {
         </>
       )}
 
-      {/* Re-sync Progress Modal */}
-      {showResyncProgress && (
-        <>
-          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60]"></div>
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 max-w-lg w-full">
-              <div className="text-center mb-6">
-                {resyncProgress.phase === 'Complete' ? (
-                  <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full mx-auto mb-4 flex items-center justify-center">
-                    <Check className="w-8 h-8 text-green-600 dark:text-green-400" />
-                  </div>
-                ) : resyncProgress.phase === 'Error' ? (
-                  <div className="w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-full mx-auto mb-4 flex items-center justify-center">
-                    <X className="w-8 h-8 text-red-600 dark:text-red-400" />
-                  </div>
-                ) : (
-                  <Loader2 className="w-16 h-16 text-blue-600 mx-auto mb-4 animate-spin" />
-                )}
-                
-                <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-                  {resyncProgress.phase === 'Complete' ? 'Re-sync Complete!' : 
-                   resyncProgress.phase === 'Error' ? 'Re-sync Failed' :
-                   'Re-syncing Transcriptions'}
-                </h3>
-                <p className="text-gray-600 dark:text-gray-400">
-                  {resyncProgress.message}
-                </p>
-              </div>
-              
-              {resyncProgress.total > 0 && resyncProgress.phase !== 'Complete' && resyncProgress.phase !== 'Error' && (
-                <div className="mb-6">
-                  <div className="flex items-center justify-between mb-2 text-sm text-gray-600 dark:text-gray-400">
-                    <span>Progress</span>
-                    <span>{resyncProgress.current} / {resyncProgress.total}</span>
-                  </div>
-                  <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3 overflow-hidden">
-                    <div 
-                      className="bg-gradient-to-r from-blue-600 to-indigo-600 h-full transition-all duration-500 rounded-full"
-                      style={{ width: `${(resyncProgress.current / resyncProgress.total) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-              
-              {(resyncProgress.phase === 'Complete' || resyncProgress.phase === 'Error') && (
-                <button
-                  onClick={() => setShowResyncProgress(false)}
-                  className="w-full px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all font-medium"
-                >
-                  Close
-                </button>
-              )}
-              
-              {resyncProgress.phase !== 'Complete' && resyncProgress.phase !== 'Error' && (
-                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-3">
-                  <p className="text-sm text-blue-900 dark:text-blue-100">
-                    You can close this window. The process will continue on the server and transcriptions will appear automatically.
-                  </p>
-                </div>
-              )}
+      {/* Re-sync Notification Toast */}
+      {showResyncNotification && (
+        <div className="fixed bottom-6 right-6 bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-4 z-50 border border-gray-200 dark:border-gray-700 max-w-md animate-slideUp">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center flex-shrink-0">
+              <RefreshCw className="w-5 h-5 text-blue-600 dark:text-blue-400 animate-spin" />
             </div>
+            <div className="flex-1">
+              <h4 className="font-semibold text-gray-900 dark:text-white mb-1">Re-sync Started</h4>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Your transcriptions are being re-synced in the background. They'll appear automatically as they're processed.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowResyncNotification(false)}
+              className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+            >
+              <X className="w-4 h-4 text-gray-500" />
+            </button>
           </div>
-        </>
+        </div>
       )}
 
       {/* Transcript Modal */}
