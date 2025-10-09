@@ -4,6 +4,24 @@ import { getToken } from 'next-auth/jwt';
 import { generateTitle, generateFallbackTitle } from '../../../lib/gemini-queue';
 import { generatePreview } from '../../../lib/transcript-utils';
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function fetchTranscriptDetails(transcriptId, assemblyAiKey) {
+  // Add a small delay to respect rate limits if syncing many new items
+  await sleep(1200); 
+  
+  const response = await fetch(
+    `https://api.assemblyai.com/v2/transcript/${transcriptId}`,
+    { headers: { 'Authorization': assemblyAiKey } }
+  );
+
+  if (!response.ok) {
+    console.error(`Failed to fetch transcript ${transcriptId}: ${response.status}`);
+    return null;
+  }
+  return await response.json();
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -24,7 +42,6 @@ export default async function handler(req, res) {
   const userEmail = token.user.email;
 
   try {
-    // Fetch all completed transcripts from AssemblyAI
     const response = await fetch('https://api.assemblyai.com/v2/transcript?limit=100&status=completed', {
       headers: { 'Authorization': assemblyAiKey }
     });
@@ -42,45 +59,39 @@ export default async function handler(req, res) {
     let skippedCount = 0;
     const newTranscriptions = [];
 
-    // Check which transcripts are new
-    for (const transcript of transcripts) {
+    for (const transcriptSummary of transcripts) {
       const existing = await prisma.transcription.findUnique({
-        where: { assemblyAiId: transcript.id }
+        where: { assemblyAiId: transcriptSummary.id }
       });
 
       if (!existing) {
-        // Fetch full transcript to get utterances for preview
-        const fullTranscriptResponse = await fetch(
-          `https://api.assemblyai.com/v2/transcript/${transcript.id}`,
-          { headers: { 'Authorization': assemblyAiKey } }
-        );
+        // *** FIX: Fetch full transcript details to get the 'created' date and utterances ***
+        const fullTranscript = await fetchTranscriptDetails(transcriptSummary.id, assemblyAiKey);
 
-        let preview = null;
-        if (fullTranscriptResponse.ok) {
-          const fullTranscript = await fullTranscriptResponse.json();
-          preview = generatePreview(fullTranscript);
+        if (!fullTranscript) {
+          console.warn(`⚠️  Skipping ${transcriptSummary.id}: Failed to fetch details`);
+          continue;
         }
 
-        // Get AssemblyAI created date
-        const assemblyCreatedAt = transcript.created ? new Date(transcript.created) : null;
+        const preview = generatePreview(fullTranscript);
+        const assemblyCreatedAt = fullTranscript.created ? new Date(fullTranscript.created) : null;
 
-        // Create new transcription entry with preview
         const transcription = await prisma.transcription.create({
           data: {
-            assemblyAiId: transcript.id,
+            assemblyAiId: fullTranscript.id,
             userEmail,
             fileName: null,
-            language: transcript.language_code,
-            duration: transcript.audio_duration,
-            wordCount: transcript.words?.length || 0,
+            language: fullTranscript.language_code,
+            duration: fullTranscript.audio_duration,
+            wordCount: fullTranscript.words?.length || 0,
             preview,
-            assemblyCreatedAt,
+            assemblyCreatedAt, // Now this will have the correct date
             title: null,
             titleGenerating: true,
           },
         });
 
-        newTranscriptions.push({ transcription, transcript });
+        newTranscriptions.push({ transcription, fullTranscript });
         syncedCount++;
       } else {
         skippedCount++;
@@ -89,40 +100,27 @@ export default async function handler(req, res) {
 
     console.log(`✅ Synced ${syncedCount} new transcripts, skipped ${skippedCount} existing`);
 
-    // Generate titles in background with rate limiting (don't wait for completion)
+    // Title generation remains the same, running in the background
     if (newTranscriptions.length > 0) {
-      console.log(`🎯 Queuing ${newTranscriptions.length} title generation tasks (rate limited to 15/min)`);
+      console.log(`🎯 Queuing ${newTranscriptions.length} title generation tasks`);
       
-      // Queue all title generation tasks - the queue will handle rate limiting
       Promise.all(
-        newTranscriptions.map(async ({ transcription, transcript }) => {
+        newTranscriptions.map(async ({ transcription, fullTranscript }) => {
           try {
-            const fullTranscriptResponse = await fetch(
-              `https://api.assemblyai.com/v2/transcript/${transcript.id}`,
-              { headers: { 'Authorization': assemblyAiKey } }
-            );
-
-            if (fullTranscriptResponse.ok) {
-              const fullTranscript = await fullTranscriptResponse.json();
-              
-              // This will be queued and rate-limited automatically
-              let title = await generateTitle(fullTranscript);
-              
-              if (!title) {
-                title = generateFallbackTitle(
-                  transcription.fileName,
-                  transcription.language,
-                  transcription.duration
-                );
-              }
-
-              await prisma.transcription.update({
-                where: { id: transcription.id },
-                data: { title, titleGenerating: false },
-              });
-
-              console.log(`✅ Title generated: "${title}"`);
+            let title = await generateTitle(fullTranscript);
+            
+            if (!title) {
+              title = generateFallbackTitle(
+                transcription.fileName,
+                transcription.language,
+                transcription.duration
+              );
             }
+
+            await prisma.transcription.update({
+              where: { id: transcription.id },
+              data: { title, titleGenerating: false },
+            });
           } catch (error) {
             console.error(`❌ Failed to generate title for ${transcription.id}:`, error);
             await prisma.transcription.update({
@@ -139,7 +137,7 @@ export default async function handler(req, res) {
       synced: syncedCount,
       skipped: skippedCount,
       total: transcripts.length,
-      message: syncedCount > 0 ? 'Titles will be generated in the background (rate limited)' : null,
+      message: syncedCount > 0 ? 'Titles will be generated in the background.' : 'No new transcripts to sync.',
     });
 
   } catch (error) {
