@@ -353,6 +353,7 @@ const AssemblyAITranscription = () => {
             language: completedTranscript.language_code,
             duration: completedTranscript.audio_duration,
             wordCount: completedTranscript.words?.length || 0,
+            transcript: completedTranscript,
           }),
         });
 
@@ -444,9 +445,12 @@ const AssemblyAITranscription = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
   
-  const formatDate = (dateString) => new Date(dateString).toLocaleString('nl-NL', { 
-    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
-  });
+  const formatDate = (dateString) => {
+    if (!dateString) return 'Unknown date';
+    return new Date(dateString).toLocaleString('nl-NL', { 
+      day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+  };
   
   const getLanguageTag = (code) => {
     if (!code) return 'Unknown';
@@ -486,7 +490,7 @@ const AssemblyAITranscription = () => {
     URL.revokeObjectURL(url);
   };
 
-  // Filter and sort
+  // Filter and sort - UPDATED to use assemblyCreatedAt
   const filteredTranscriptions = pastTranscriptions
     .filter(t => {
       if (searchQuery && !t.title?.toLowerCase().includes(searchQuery.toLowerCase())) return false;
@@ -494,7 +498,12 @@ const AssemblyAITranscription = () => {
       return true;
     })
     .sort((a, b) => {
-      if (sortBy === 'date') return new Date(b.createdAt) - new Date(a.createdAt);
+      if (sortBy === 'date') {
+        // Use AssemblyAI creation date, fallback to database date if not available
+        const dateA = a.assemblyCreatedAt ? new Date(a.assemblyCreatedAt) : new Date(a.createdAt);
+        const dateB = b.assemblyCreatedAt ? new Date(b.assemblyCreatedAt) : new Date(b.createdAt);
+        return dateB - dateA;
+      }
       if (sortBy === 'duration') return (b.duration || 0) - (a.duration || 0);
       if (sortBy === 'alphabetical') return (a.title || '').localeCompare(b.title || '');
       return 0;
@@ -744,7 +753,6 @@ const AssemblyAITranscription = () => {
                     <span>{formatTime(transcription.duration || 0)}</span>
                   </div>
                   
-                  {/* UPDATED: Use preview from database instead of API call */}
                   <div className="relative h-20 overflow-hidden">
                     <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-3">
                       {transcription.preview || 'Click to load transcript...'}
@@ -754,7 +762,7 @@ const AssemblyAITranscription = () => {
                   
                   <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
                     <div className="text-xs text-gray-500 dark:text-gray-400">
-                      {formatDate(transcription.createdAt)}
+                      {formatDate(transcription.assemblyCreatedAt || transcription.createdAt)}
                     </div>
                   </div>
                 </div>
