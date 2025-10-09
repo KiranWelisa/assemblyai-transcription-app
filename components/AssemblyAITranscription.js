@@ -541,10 +541,20 @@ const AssemblyAITranscription = () => {
     URL.revokeObjectURL(url);
   };
 
+  // Filter and sort - UPDATED: Only show fully synced transcriptions
   const filteredTranscriptions = pastTranscriptions
     .filter(t => {
+      // Only show transcriptions with essential data
+      // Duration and preview are required (wordCount can be 0 for short files)
+      if (t.duration === null || t.duration === undefined) return false;
+      if (!t.preview && t.preview !== '') return false;
+      
+      // Apply search filter
       if (searchQuery && !t.title?.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+      
+      // Apply tag filter
       if (filterTag && !t.tags?.includes(filterTag) && getLanguageTag(t.language) !== filterTag) return false;
+      
       return true;
     })
     .sort((a, b) => {
@@ -787,10 +797,19 @@ const AssemblyAITranscription = () => {
               >
                 <div className="p-6">
                   <div className="flex items-start justify-between mb-3">
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white line-clamp-2 flex-1">
-                      {transcription.title || 'Untitled Transcription'}
-                    </h3>
-                    {transcription.titleGenerating && <Sparkles className="w-5 h-5 text-blue-500 animate-pulse flex-shrink-0 ml-2" />}
+                    {transcription.titleGenerating ? (
+                      <div className="flex-1">
+                        <div className="h-6 bg-gradient-to-r from-blue-200 via-blue-300 to-blue-200 dark:from-blue-800 dark:via-blue-700 dark:to-blue-800 rounded animate-shimmer bg-[length:200%_100%] mb-1"></div>
+                        <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400">
+                          <Sparkles className="w-3 h-3 animate-pulse" />
+                          <span className="animate-pulse">Generating title...</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white line-clamp-2 flex-1">
+                        {transcription.title || 'Untitled Transcription'}
+                      </h3>
+                    )}
                   </div>
                   
                   <div className="flex items-center gap-2 mb-4 text-sm text-gray-600 dark:text-gray-400">
@@ -924,9 +943,18 @@ const AssemblyAITranscription = () => {
                 <h3 className="text-xl font-bold text-gray-900 dark:text-white">Purge & Re-sync?</h3>
               </div>
               
-              <p className="text-gray-600 dark:text-gray-400 mb-6">
-                This will delete all your local transcriptions and fetch them again from AssemblyAI. This is useful to fix missing data or update metadata. This process is rate-limited and may take several minutes.
+              <p className="text-gray-600 dark:text-gray-400 mb-4">
+                This will delete all your local transcriptions and fetch them again from AssemblyAI. This is useful to fix missing data or update metadata.
               </p>
+              
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-3 mb-6">
+                <p className="text-sm text-blue-900 dark:text-blue-100 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <span>
+                    <strong>Note:</strong> The process will continue on the server even if you close this tab. Transcriptions will appear as they're processed.
+                  </span>
+                </p>
+              </div>
               
               <div className="flex gap-3">
                 <button
@@ -999,6 +1027,14 @@ const AssemblyAITranscription = () => {
                 >
                   Close
                 </button>
+              )}
+              
+              {resyncProgress.phase !== 'Complete' && resyncProgress.phase !== 'Error' && (
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-3">
+                  <p className="text-sm text-blue-900 dark:text-blue-100">
+                    You can close this window. The process will continue on the server and transcriptions will appear automatically.
+                  </p>
+                </div>
               )}
             </div>
           </div>
