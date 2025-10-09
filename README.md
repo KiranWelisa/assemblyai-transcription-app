@@ -7,16 +7,26 @@ A modern audio/video transcription application with Dutch language default, spea
 - 🇳🇱 Dutch language transcription by default (with English option)
 - 🎤 Speaker diarization always enabled
 - 📁 Drag-and-drop file upload from URL or Google Drive
-- 🤖 **AI-generated titles** using Gemini (analyzes transcript content intelligently)
+- 🤖 **AI-generated titles** using Gemini 2.5 Flash Lite (analyzes transcript content intelligently)
 - 💾 **Persistent storage** with Prisma Postgres (keeps all your transcriptions)
 - 🔄 Real-time transcription status
 - 📜 View all past transcriptions with smart titles
 - 🎨 Modern, responsive UI with onboarding
 - 🔒 Secure API proxy implementation
 - ⚡ **Google One Tap login** for super fast authentication
-- 🔄 **Automatic token refresh**, stay logged in for 30 days
+- 🔄 **Automatic token refresh** (stay logged in for 30 days)
+- 🚀 **Smart rate limiting** with automatic fallback to prevent quota exhaustion
 
 ## 🆕 Latest Updates
+
+### 🚀 Improved Rate Limiting & Quota Management
+The app now uses **Gemini 2.5 Flash Lite** with **1000 requests per day** (previously 50/day with 2.0 Flash). Features include:
+- **Automatic quota tracking** with daily reset
+- **Exponential backoff** for temporary errors (max 5 retries)
+- **Graceful degradation** to fallback titles when quota is exhausted
+- **Detailed logging** for monitoring API usage
+
+This means you can generate 20x more AI titles per day!
 
 ### 🤖 AI-Powered Title Generation
 Every transcription now gets an intelligent, descriptive title! Using Gemini AI, the app analyzes the beginning, middle, and end of your transcript (200 words each) to generate a meaningful title like "Q4 Planning Vergadering" or "Interview: Marketing Strategie".
@@ -92,6 +102,7 @@ GEMINI_API_KEY=your_gemini_api_key
 1. Go to [Google AI Studio](https://aistudio.google.com/)
 2. Click "Get API Key"
 3. Copy your key
+4. **Note:** Free tier provides 1000 requests per day for title generation
 
 ### Step 5: Deploy!
 
@@ -154,7 +165,7 @@ assemblyai-transcription-app/
 │   └── schema.prisma        # Database schema
 ├── lib/
 │   ├── prisma.js           # Prisma client
-│   └── gemini.js           # AI title generation
+│   └── gemini-queue.js     # AI title generation with rate limiting
 ├── pages/
 │   ├── _document.js        # Google Identity Services
 │   ├── index.js            # Main page
@@ -180,21 +191,33 @@ assemblyai-transcription-app/
    ↓
 4. Metadata saved to database
    ↓
-5. [Background] Gemini analyzes transcript
+5. [Background] Gemini analyzes transcript (queued with rate limiting)
    - Extracts: 200 start + 200 middle + 200 end words
    - Generates: "Q4 Planning Meeting" (max 60 chars)
+   - Automatic retry with exponential backoff if rate limited
    ↓
 6. Title updated in database
    ↓
 7. UI polls and shows new title (2-5 seconds) ✨
 ```
 
+### Rate Limiting Strategy
+
+The app uses an intelligent queue system for Gemini API calls:
+
+- **Daily quota tracking:** Monitors usage against 1000 requests/day limit
+- **Per-minute rate limiting:** Respects 15 requests per minute
+- **Exponential backoff:** Retries failed requests (5s → 10s → 20s → 40s → 60s)
+- **Graceful degradation:** Falls back to filename-based titles when quota exhausted
+- **Automatic reset:** Daily quota resets at midnight Pacific Time
+
 ### Why This Approach?
 
 - **Fast UX**: Transcript shows immediately, title appears moments later
 - **Smart Sampling**: 200+200+200 words captures context without sending entire transcript
 - **Cost Efficient**: Only ~600 words to Gemini instead of thousands
-- **Fallback**: If Gemini fails, generates title from filename/metadata
+- **Resilient**: Handles API errors gracefully with automatic retries
+- **Fallback**: Generates decent titles even when AI quota is exhausted
 
 ## 🔐 Security Features
 
@@ -240,6 +263,24 @@ This keeps the database lightweight and respects data ownership!
 - **Title generation**: 2-5 seconds (background, non-blocking)
 - **Past transcriptions load**: < 200ms (Postgres query)
 - **Full transcript load**: ~1 second (AssemblyAI API call)
+- **Daily AI title quota**: 1000 titles per day (free tier)
+
+## 🔧 API Quota Monitoring
+
+Monitor your Gemini API usage at: `/api/gemini/status`
+
+Returns:
+```json
+{
+  "queue": {
+    "queueLength": 0,
+    "processing": false,
+    "dailyUsage": 47,
+    "dailyRemaining": 953,
+    "quotaExhausted": false
+  }
+}
+```
 
 ## 📝 License
 
@@ -254,4 +295,4 @@ MIT License
 
 ---
 
-Made with ❤️ • Powered by AssemblyAI, Gemini AI & Vercel Postgres
+Made with ❤️ • Powered by AssemblyAI, Gemini 2.5 Flash Lite & Vercel Postgres
