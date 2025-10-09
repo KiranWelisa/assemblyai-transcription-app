@@ -3,6 +3,7 @@ import { prisma } from '../../../lib/prisma';
 import { getToken } from 'next-auth/jwt';
 import { generateTitle, generateFallbackTitle } from '../../../lib/gemini-queue';
 import { generatePreview } from '../../../lib/transcript-utils';
+import { waitUntil } from '@vercel/functions';
 
 /**
  * Sleep helper for rate limiting
@@ -93,7 +94,7 @@ async function runPurgeAndResyncInBackground(userEmail, assemblyAiKey) {
 
     // ==========================================
     // PHASE 3 & 4: SYNC TRANSCRIPTS AND GENERATE TITLES
-    // Combined for efficiency - generate titles immediately after creating records
+    // Combined for efficiency, generate titles immediately after creating records
     // ==========================================
     console.log('🔄 Phase 3: Syncing transcripts and queueing title generation...');
     
@@ -175,9 +176,9 @@ export default async function handler(req, res) {
 
   const userEmail = token.user.email;
 
-  // *** FIX: Run the long process in the background and respond immediately ***
-  // No await here - let it run independently
-  runPurgeAndResyncInBackground(userEmail, assemblyAiKey);
+  // *** CRITICAL FIX: Use waitUntil() to ensure background task completes ***
+  // This tells Vercel to keep the serverless function alive until the promise resolves
+  waitUntil(runPurgeAndResyncInBackground(userEmail, assemblyAiKey));
 
   // Return an immediate success response to the client
   // 202 Accepted indicates the request has been accepted for processing
