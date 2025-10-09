@@ -4,7 +4,7 @@ import { Upload, Link, Loader2, User, ChevronDown, ChevronUp, CheckCircle, Alert
 import { useSession, signIn, signOut } from 'next-auth/react';
 
 const AssemblyAITranscription = () => {
-  const { data: session } = useSession();
+  const { data: session, status, update } = useSession();
 
   // State variables
   const [audioUrl, setAudioUrl] = useState('');
@@ -18,8 +18,11 @@ const AssemblyAITranscription = () => {
   const [apiKey, setApiKey] = useState('');
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [driveFile, setDriveFile] = useState(null);
+  const [oneTapInitialized, setOneTapInitialized] = useState(false);
   const pickerLoadedRef = useRef(false);
+  const oneTapRef = useRef(false);
 
+  // Load API key from localStorage when session exists
   useEffect(() => {
     if (session) {
       const storedKey = localStorage.getItem('assemblyai_api_key');
@@ -29,6 +32,106 @@ const AssemblyAITranscription = () => {
       }
     }
   }, [session]);
+
+  // Session monitoring for automatic token refresh
+  useEffect(() => {
+    if (!session) return;
+
+    const checkSession = async () => {
+      // Trigger session update which will automatically refresh token if needed
+      await update();
+    };
+
+    // Check every 5 minutes
+    const interval = setInterval(checkSession, 5 * 60 * 1000);
+
+    return () => clearInterval(interval);
+  }, [session, update]);
+
+  // Initialize Google One Tap
+  useEffect(() => {
+    if (status === 'loading' || status === 'authenticated' || oneTapInitialized || oneTapRef.current) return;
+
+    const initializeOneTap = () => {
+      if (!window.google?.accounts?.id) {
+        console.log('Google Identity Services not loaded yet');
+        return;
+      }
+
+      try {
+        window.google.accounts.id.initialize({
+          client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+          callback: handleOneTapCallback,
+          auto_select: false,
+          cancel_on_tap_outside: true,
+        });
+
+        // Show the One Tap prompt
+        window.google.accounts.id.prompt((notification) => {
+          if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+            console.log('One Tap not displayed:', notification.getNotDisplayedReason() || notification.getSkippedReason());
+          }
+        });
+
+        oneTapRef.current = true;
+        setOneTapInitialized(true);
+        console.log('Google One Tap initialized');
+      } catch (error) {
+        console.error('Error initializing One Tap:', error);
+      }
+    };
+
+    // Try to initialize immediately if script is loaded
+    if (window.google?.accounts?.id) {
+      initializeOneTap();
+    } else {
+      // Wait for script to load
+      const checkInterval = setInterval(() => {
+        if (window.google?.accounts?.id) {
+          clearInterval(checkInterval);
+          initializeOneTap();
+        }
+      }, 100);
+
+      // Cleanup after 5 seconds
+      setTimeout(() => clearInterval(checkInterval), 5000);
+
+      return () => clearInterval(checkInterval);
+    }
+  }, [status, oneTapInitialized]);
+
+  // Handle Google One Tap callback
+  const handleOneTapCallback = async (response) => {
+    try {
+      console.log('One Tap callback received');
+      
+      // Use NextAuth's signIn with credentials provider
+      const result = await signIn('google', {
+        redirect: false,
+        credential: response.credential,
+      });
+
+      if (result?.error) {
+        console.error('One Tap sign in error:', result.error);
+        setError('Login failed. Please try again.');
+      } else {
+        console.log('One Tap sign in successful');
+      }
+    } catch (error) {
+      console.error('One Tap callback error:', error);
+      setError('An error occurred during login.');
+    }
+  };
+
+  // Handle manual Google sign in (fallback)
+  const handleGoogleSignIn = async () => {
+    try {
+      await signIn('google', { redirect: false });
+    } catch (error) {
+      console.error('Google sign in error:', error);
+      setError('Login failed. Please try again.');
+    }
+  };
 
   const handleApiKeySave = () => {
     if (apiKeyInput) {
@@ -45,7 +148,7 @@ const AssemblyAITranscription = () => {
     setPastTranscriptions([]);
   };
 
-  // --- Oorspronkelijke Google Picker Logic ---
+  // Google Picker initialization
   useEffect(() => {
     if (document.querySelector('script#google-api-script')) {
       return;
@@ -97,7 +200,7 @@ const AssemblyAITranscription = () => {
       return;
     }
     
-    if (session.error === "AccessTokenExpired") {
+    if (session.error === "RefreshAccessTokenError") {
       setError('Je sessie is verlopen. Log opnieuw in.');
       signOut();
       return;
@@ -320,9 +423,9 @@ const AssemblyAITranscription = () => {
             ) : (
                 <div className="bg-white rounded-lg shadow-lg p-6 mb-6 text-center">
                     <h3 className="text-lg font-semibold mb-4">Welcome!</h3>
-                    <p className="text-sm text-gray-600 mb-6">Please log in with your Google account to get started.</p>
+                    <p className="text-sm text-gray-600 mb-6">Log in with your Google account to get started. We'll show you a quick One Tap login if you're already signed in to Google.</p>
                     <button
-                    onClick={() => signIn('google')}
+                    onClick={handleGoogleSignIn}
                     className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 mx-auto"
                     >
                         <svg className="w-5 h-5" aria-hidden="true" focusable="false" viewBox="0 0 488 512"><path fill="currentColor" d="M488 261.8C488 403.3 381.5 512 244 512 109.8 512 0 402.2 0 256S109.8 0 244 0c73.2 0 136 29.1 181.2 73.2L375 152.1C341.3 120.3 296.8 97.9 244 97.9c-88.3 0-159.9 71.6-159.9 159.9s71.6 159.9 159.9 159.9c102.4 0 133.4-85.1 136.9-123.9H244v-75.1h236.1c2.3 12.7 3.9 26.1 3.9 40.8z"></path></svg>

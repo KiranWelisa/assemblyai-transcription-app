@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "google-auth-library": "^9.0.0",
     "lucide-react": "^0.263.1",
     "next": "14.0.4",
     "next-auth": "^4.24.5",
