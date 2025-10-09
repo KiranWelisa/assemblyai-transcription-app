@@ -1,0 +1,30 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("POSTGRES_URL")
+  directUrl = env("DATABASE_URL")
+}
+
+model Transcription {
+  id                String   @id @default(cuid())
+  assemblyAiId      String   @unique
+  userEmail         String
+  title             String?
+  titleGenerating   Boolean  @default(true)
+  fileName          String?
+  language          String?
+  duration          Float?
+  wordCount         Int?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userEmail])
+  @@index([createdAt(sort: Desc)])
+  @@map("transcriptions")
+}
