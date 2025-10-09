@@ -22,6 +22,7 @@ model Transcription {
   wordCount         Int?
   preview           String?
   tags              String[] @default([])
+  assemblyCreatedAt DateTime? // Date from AssemblyAI when transcript was created
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 

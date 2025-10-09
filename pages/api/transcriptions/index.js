@@ -28,7 +28,7 @@ export default async function handler(req, res) {
       try {
         const transcriptions = await prisma.transcription.findMany({
           where: { userEmail },
-          orderBy: { createdAt: 'desc' },
+          orderBy: { assemblyCreatedAt: 'desc' },
           take: 50,
         });
 
@@ -58,6 +58,9 @@ export default async function handler(req, res) {
           preview = generatePreview(transcript);
         }
 
+        // Get AssemblyAI created date if available
+        const assemblyCreatedAt = transcript?.created ? new Date(transcript.created) : null;
+
         const transcription = await prisma.transcription.create({
           data: {
             assemblyAiId,
@@ -67,6 +70,7 @@ export default async function handler(req, res) {
             duration,
             wordCount,
             preview,
+            assemblyCreatedAt,
             title: null,
             titleGenerating: true,
           },

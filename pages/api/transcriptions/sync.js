@@ -61,6 +61,9 @@ export default async function handler(req, res) {
           preview = generatePreview(fullTranscript);
         }
 
+        // Get AssemblyAI created date
+        const assemblyCreatedAt = transcript.created ? new Date(transcript.created) : null;
+
         // Create new transcription entry with preview
         const transcription = await prisma.transcription.create({
           data: {
@@ -71,6 +74,7 @@ export default async function handler(req, res) {
             duration: transcript.audio_duration,
             wordCount: transcript.words?.length || 0,
             preview,
+            assemblyCreatedAt,
             title: null,
             titleGenerating: true,
           },
