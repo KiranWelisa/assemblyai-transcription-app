@@ -2,16 +2,14 @@
 import { prisma } from '../../../lib/prisma';
 import { getToken } from 'next-auth/jwt';
 import { queueTitleGeneration } from '../../../lib/gemini-queue';
-import { waitUntil } from '@vercel/functions';
 
 /**
- * Endpoint om achtergrond title generation te triggeren voor transcripties zonder titel.
- * Deze endpoint reageert snel (<1s) en gebruikt waitUntil voor background processing.
+ * Endpoint om titels te genereren voor transcripties zonder titel.
  * 
  * VERCEL HOBBY PLAN COMPATIBLE:
- * - Response binnen 1 seconde
- * - Background processing via waitUntil (blijft draaien na response)
- * - Batch processing om rate limits te respecteren
+ * - Verwerkt slechts 2-3 items per call
+ * - Blijft ruim binnen 10 seconden timeout
+ * - Frontend roept dit meerdere keren aan voor batch processing
  */
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -24,7 +22,7 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { assemblyAiKey, maxItems = 10 } = req.body;
+  const { assemblyAiKey, batchSize = 2 } = req.body;
 
   if (!assemblyAiKey) {
     return res.status(400).json({ error: 'AssemblyAI API key is required' });
@@ -33,7 +31,7 @@ export default async function handler(req, res) {
   const userEmail = token.user.email;
 
   try {
-    // STAP 1: Snel alle transcripties zonder titel ophalen (binnen 1 seconde)
+    // Haal alleen een kleine batch op
     const untitledTranscriptions = await prisma.transcription.findMany({
       where: {
         userEmail,
@@ -42,7 +40,7 @@ export default async function handler(req, res) {
       orderBy: {
         createdAt: 'desc',
       },
-      take: maxItems, // Limiteer tot X items om queue niet te overbelasten
+      take: batchSize, // Slechts 2-3 items per keer
       select: {
         id: true,
         assemblyAiId: true,
@@ -55,93 +53,98 @@ export default async function handler(req, res) {
     if (untitledTranscriptions.length === 0) {
       return res.status(200).json({
         success: true,
-        message: 'No pending titles to process',
-        queued: 0,
+        processed: 0,
+        remaining: 0,
+        hasMore: false,
+        message: 'All titles processed',
       });
     }
 
-    console.log(`📋 Found ${untitledTranscriptions.length} transcriptions without titles`);
+    console.log(`📋 Processing ${untitledTranscriptions.length} transcriptions in this batch`);
 
-    // STAP 2: Respond immediately to client (binnen 1 seconde)
-    res.status(200).json({
-      success: true,
-      message: `Queued ${untitledTranscriptions.length} titles for generation`,
-      queued: untitledTranscriptions.length,
-    });
+    let processed = 0;
 
-    // STAP 3: Start background processing via waitUntil
-    // Dit blijft draaien na de response en is niet gebonden aan de 10s timeout
-    waitUntil(
-      (async () => {
-        console.log(`🚀 Starting background title generation for ${untitledTranscriptions.length} items`);
-
-        for (const transcription of untitledTranscriptions) {
-          try {
-            // Fetch full transcript van AssemblyAI
-            const response = await fetch(
-              `https://api.assemblyai.com/v2/transcript/${transcription.assemblyAiId}`,
-              { 
-                headers: { 
-                  'Authorization': assemblyAiKey,
-                  'Content-Type': 'application/json'
-                } 
-              }
-            );
-
-            if (!response.ok) {
-              console.error(`❌ Failed to fetch transcript ${transcription.assemblyAiId}: ${response.status}`);
-              
-              // Mark als failed zodat het niet steeds opnieuw geprobeerd wordt
-              await prisma.transcription.update({
-                where: { id: transcription.id },
-                data: { titleGenerating: false },
-              });
-              continue;
-            }
-
-            const fullTranscript = await response.json();
-            
-            // Queue title generation (met rate limiting ingebouwd)
-            await queueTitleGeneration(transcription.id, fullTranscript, prisma);
-            
-            console.log(`✅ Queued title generation for ${transcription.id}`);
-
-            // Kleine delay tussen items om API niet te overbelasten
-            await new Promise(resolve => setTimeout(resolve, 500));
-
-          } catch (error) {
-            console.error(`❌ Error processing transcription ${transcription.id}:`, error);
-            
-            // Mark als failed
-            try {
-              await prisma.transcription.update({
-                where: { id: transcription.id },
-                data: { titleGenerating: false },
-              });
-            } catch (dbError) {
-              console.error('Failed to mark as failed:', dbError);
-            }
+    // Verwerk items SYNCHROON (binnen de request)
+    for (const transcription of untitledTranscriptions) {
+      try {
+        // Fetch full transcript van AssemblyAI
+        const response = await fetch(
+          `https://api.assemblyai.com/v2/transcript/${transcription.assemblyAiId}`,
+          { 
+            headers: { 
+              'Authorization': assemblyAiKey,
+              'Content-Type': 'application/json'
+            } 
           }
+        );
+
+        if (!response.ok) {
+          console.error(`❌ Failed to fetch transcript ${transcription.assemblyAiId}: ${response.status}`);
+          
+          // Mark als failed zodat het niet steeds opnieuw geprobeerd wordt
+          await prisma.transcription.update({
+            where: { id: transcription.id },
+            data: { titleGenerating: false },
+          });
+          continue;
         }
 
-        console.log(`🎉 Background title generation complete for ${untitledTranscriptions.length} items`);
-      })()
-    );
+        const fullTranscript = await response.json();
+        
+        // Queue title generation (deze is async maar we wachten niet)
+        // Het wordt in de achtergrond verwerkt door de queue
+        queueTitleGeneration(transcription.id, fullTranscript, prisma);
+        
+        processed++;
+        console.log(`✅ Queued title generation for ${transcription.id}`);
+
+      } catch (error) {
+        console.error(`❌ Error processing transcription ${transcription.id}:`, error);
+        
+        // Mark als failed
+        try {
+          await prisma.transcription.update({
+            where: { id: transcription.id },
+            data: { titleGenerating: false },
+          });
+        } catch (dbError) {
+          console.error('Failed to mark as failed:', dbError);
+        }
+      }
+    }
+
+    // Check hoeveel items er nog over zijn
+    const remainingCount = await prisma.transcription.count({
+      where: {
+        userEmail,
+        titleGenerating: true,
+      },
+    });
+
+    const hasMore = remainingCount > 0;
+
+    console.log(`✅ Batch complete: ${processed} processed, ${remainingCount} remaining`);
+
+    return res.status(200).json({
+      success: true,
+      processed,
+      remaining: remainingCount,
+      hasMore,
+      message: hasMore 
+        ? `Processed ${processed} items, ${remainingCount} remaining` 
+        : `All ${processed} items processed`,
+    });
 
   } catch (error) {
     console.error('❌ Error in process-titles endpoint:', error);
-    
-    // Als we hier komen voordat de response verstuurd is
-    if (!res.headersSent) {
-      return res.status(500).json({ 
-        error: 'Failed to process titles',
-        details: error.message 
-      });
-    }
+    return res.status(500).json({ 
+      error: 'Failed to process titles',
+      details: error.message 
+    });
   }
 }
 
-// Vercel configuration: zorg dat deze function snel genoeg is
+// Vercel configuration
 export const config = {
   maxDuration: 10, // Hobby plan limiet
 };
