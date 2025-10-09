@@ -415,14 +415,20 @@ const AssemblyAITranscription = () => {
     }
   };
 
+  // UPDATED: Use proxy API instead of direct AssemblyAI call
   const loadTranscript = async (transcription) => {
     if (!apiKey) return;
     try {
-      const response = await fetch(`https://api.assemblyai.com/v2/transcript/${transcription.assemblyAiId}`, {
-        headers: { 'Authorization': apiKey }
+      // Use our proxy API to avoid CORS preflight
+      const response = await fetch(`/api/assemblyai/transcript/${transcription.assemblyAiId}`, {
+        headers: { 
+          'x-assemblyai-key': apiKey 
+        }
       });
+      
       if (!response.ok) throw new Error('Failed to load transcript');
       const transcript = await response.json();
+      
       setSelectedTranscript({ ...transcription, fullTranscript: transcript });
       setShowModal(true);
     } catch (err) {
@@ -454,15 +460,6 @@ const AssemblyAITranscription = () => {
     if (String(code).toLowerCase().startsWith('nl')) return '🇳🇱';
     if (String(code).toLowerCase().startsWith('en')) return '🇬🇧';
     return '🌐';
-  };
-
-  const getTranscriptPreview = (transcript) => {
-    if (!transcript?.fullTranscript?.utterances?.length) return '';
-    const text = transcript.fullTranscript.utterances
-      .slice(0, 3)
-      .map(u => u.text)
-      .join(' ');
-    return text.substring(0, 150);
   };
 
   const handleCopy = () => {
@@ -747,9 +744,10 @@ const AssemblyAITranscription = () => {
                     <span>{formatTime(transcription.duration || 0)}</span>
                   </div>
                   
+                  {/* UPDATED: Use preview from database instead of API call */}
                   <div className="relative h-20 overflow-hidden">
                     <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-3">
-                      {getTranscriptPreview(transcription) || 'Loading preview...'}
+                      {transcription.preview || 'Click to load transcript...'}
                     </p>
                     <div className="absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-white dark:from-gray-800 to-transparent"></div>
                   </div>
@@ -902,7 +900,7 @@ const AssemblyAITranscription = () => {
         </>
       )}
 
-      {/* Sync Progress Toast - Only visible when syncing */}
+      {/* Sync Progress Toast */}
       {syncing && (
         <div className="fixed bottom-6 right-6 bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-4 z-50 flex items-center gap-3 border border-gray-200 dark:border-gray-700">
           <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
