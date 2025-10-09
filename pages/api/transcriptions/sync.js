@@ -2,6 +2,7 @@
 import { prisma } from '../../../lib/prisma';
 import { getToken } from 'next-auth/jwt';
 import { generateTitle, generateFallbackTitle } from '../../../lib/gemini';
+import { generatePreview } from '../../../lib/transcript-utils';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -48,7 +49,19 @@ export default async function handler(req, res) {
       });
 
       if (!existing) {
-        // Create new transcription entry
+        // Fetch full transcript to get utterances for preview
+        const fullTranscriptResponse = await fetch(
+          `https://api.assemblyai.com/v2/transcript/${transcript.id}`,
+          { headers: { 'Authorization': assemblyAiKey } }
+        );
+
+        let preview = null;
+        if (fullTranscriptResponse.ok) {
+          const fullTranscript = await fullTranscriptResponse.json();
+          preview = generatePreview(fullTranscript);
+        }
+
+        // Create new transcription entry with preview
         const transcription = await prisma.transcription.create({
           data: {
             assemblyAiId: transcript.id,
@@ -57,6 +70,7 @@ export default async function handler(req, res) {
             language: transcript.language_code,
             duration: transcript.audio_duration,
             wordCount: transcript.words?.length || 0,
+            preview,
             title: null,
             titleGenerating: true,
           },
@@ -73,11 +87,9 @@ export default async function handler(req, res) {
 
     // Generate titles in background (don't wait)
     if (newTranscriptions.length > 0) {
-      // Start async title generation for all new transcriptions
       Promise.all(
         newTranscriptions.map(async ({ transcription, transcript }) => {
           try {
-            // Fetch full transcript with words
             const fullTranscriptResponse = await fetch(
               `https://api.assemblyai.com/v2/transcript/${transcript.id}`,
               { headers: { 'Authorization': assemblyAiKey } }
@@ -111,7 +123,7 @@ export default async function handler(req, res) {
             });
           }
         })
-      ).catch(console.error); // Don't block response
+      ).catch(console.error);
     }
 
     return res.status(200).json({
