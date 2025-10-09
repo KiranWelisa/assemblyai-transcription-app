@@ -1,6 +1,7 @@
 // pages/api/transcriptions/index.js
 import { prisma } from '../../../lib/prisma';
 import { getToken } from 'next-auth/jwt';
+import { generatePreview } from '../../../lib/transcript-utils';
 
 export default async function handler(req, res) {
   // Add CORS headers for debugging
@@ -44,13 +45,19 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'POST') {
-      const { assemblyAiId, fileName, language, duration, wordCount } = req.body;
+      const { assemblyAiId, fileName, language, duration, wordCount, transcript } = req.body;
 
       if (!assemblyAiId) {
         return res.status(400).json({ error: 'assemblyAiId is required' });
       }
 
       try {
+        // Generate preview from transcript if provided
+        let preview = null;
+        if (transcript) {
+          preview = generatePreview(transcript);
+        }
+
         const transcription = await prisma.transcription.create({
           data: {
             assemblyAiId,
@@ -59,6 +66,7 @@ export default async function handler(req, res) {
             language,
             duration,
             wordCount,
+            preview,
             title: null,
             titleGenerating: true,
           },
