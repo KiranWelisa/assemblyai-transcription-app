@@ -1,298 +1,106 @@
+Of course. Here is a cleaned-up and simplified `README.md` file that focuses on the essential information and provides a clear, working one-click Vercel deployment setup.
+
+-----
+
 # AssemblyAI Transcription App
 
-A modern audio/video transcription application with Dutch language default, speaker diarization, AI-generated titles, and persistent storage. Built with Next.js and ready for instant deployment on Vercel.
+A modern audio/video transcription application built with Next.js, featuring AI-powered title generation, persistent storage, and seamless deployment on Vercel.
 
-## Features
+## Core Features
 
-- 🇳🇱 Dutch language transcription by default (with English option)
-- 🎤 Speaker diarization always enabled
-- 📁 Drag-and-drop file upload from URL or Google Drive
-- 🤖 **AI-generated titles** using Gemini 2.5 Flash Lite (analyzes transcript content intelligently)
-- 💾 **Persistent storage** with Prisma Postgres (keeps all your transcriptions)
-- 🔄 Real-time transcription status
-- 📜 View all past transcriptions with smart titles
-- 🎨 Modern, responsive UI with onboarding
-- 🔒 Secure API proxy implementation
-- ⚡ **Google One Tap login** for super fast authentication
-- 🔄 **Automatic token refresh** (stay logged in for 30 days)
-- 🚀 **Smart rate limiting** with automatic fallback to prevent quota exhaustion
+  - 🇳🇱 **Dutch & English Transcription**: Transcribe audio and video files with speaker diarization.
+  - 🤖 **AI-Generated Titles**: Automatically generate smart, descriptive titles for your transcriptions using Gemini.
+  - 💾 **Persistent Storage**: Save all your transcriptions in a Postgres database using Prisma.
+  - 🔄 **Real-Time Status**: Track the status of your transcriptions in real-time.
+  - ⚡ **Google One Tap Login**: Fast and secure authentication.
+  - 📁 **Google Drive Integration**: Easily transcribe files directly from your Google Drive.
 
-## 🆕 Latest Updates
-
-### 🚀 Improved Rate Limiting & Quota Management
-The app now uses **Gemini 2.5 Flash Lite** with **1000 requests per day** (previously 50/day with 2.0 Flash). Features include:
-- **Automatic quota tracking** with daily reset
-- **Exponential backoff** for temporary errors (max 5 retries)
-- **Graceful degradation** to fallback titles when quota is exhausted
-- **Detailed logging** for monitoring API usage
-
-This means you can generate 20x more AI titles per day!
-
-### 🤖 AI-Powered Title Generation
-Every transcription now gets an intelligent, descriptive title! Using Gemini AI, the app analyzes the beginning, middle, and end of your transcript (200 words each) to generate a meaningful title like "Q4 Planning Vergadering" or "Interview: Marketing Strategie".
-
-### 💾 Database Storage
-All transcriptions are now saved in Postgres with metadata (title, language, duration, word count). Your transcription history is preserved even if you switch devices!
-
-### 🎯 Easy Onboarding
-New users see a big, friendly button that takes them directly to AssemblyAI signup to get their free API key.
+-----
 
 ## 🚀 Deploy to Vercel
 
-### Quick Setup Checklist
+Get your own version of this application running in minutes with Vercel.
 
-Before deploying, you need:
-- ✅ Google OAuth credentials ([get them here](https://console.cloud.google.com))
-- ✅ Gemini API key ([get it here](https://aistudio.google.com))
-- ✅ Vercel Prisma Postgres database (created in Vercel dashboard)
+### Step 1: Click to Deploy
 
-### Step 1: Fork & Deploy
+[](https://vercel.com/new/clone?repository-url=https://github.com/KiranWelisa/assemblyai-transcription-app)
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/KiranWelisa/assemblyai-transcription-app)
+Clicking the button above will fork the repository to your GitHub account and start the deployment process on Vercel.
 
-1. Click the button above
-2. Fork to your GitHub
-3. Vercel will start the deployment
+### Step 2: Set Up the Database
 
-### Step 2: Create Prisma Postgres Database
+After the deployment starts, you'll be prompted to create a database.
 
-1. In Vercel dashboard, go to your project
-2. Click **Storage** tab
-3. Click **Create Database**
-4. Select **Postgres Prisma**
-5. Choose a name (e.g., `transcriptions-db`)
-6. Select region (Amsterdam recommended)
-7. Click **Create**
-
-Vercel automatically adds these environment variables:
-- `POSTGRES_URL`
-- `DATABASE_URL`
+1.  In the Vercel dashboard, go to the **Storage** tab for your new project.
+2.  Click **Create Database** and select **Postgres**.
+3.  Follow the instructions to create and connect the database. Vercel will automatically add the required `POSTGRES_URL` and `DATABASE_URL` environment variables to your project.
 
 ### Step 3: Add Environment Variables
 
-In Vercel project settings → Environment Variables, add:
+You need to provide API keys for Google and Gemini. In your Vercel project's settings, add the following environment variables:
 
-```
-# Google OAuth
-NEXT_PUBLIC_GOOGLE_CLIENT_ID=your_google_client_id
-GOOGLE_CLIENT_SECRET=your_google_client_secret
+```env
+# Google OAuth (for login & Drive)
+NEXT_PUBLIC_GOOGLE_CLIENT_ID=your_google_client_id_here
+GOOGLE_CLIENT_SECRET=your_google_client_secret_here
+NEXT_PUBLIC_GOOGLE_API_KEY=your_google_api_key_here
+NEXT_PUBLIC_GOOGLE_APP_ID=your_google_project_id_here
 
-# NextAuth
-NEXTAUTH_SECRET=generate_with_openssl_rand_base64_32
+# NextAuth (for authentication)
+NEXTAUTH_SECRET=generate_a_secret_key_here
 
-# Google Drive
-NEXT_PUBLIC_GOOGLE_API_KEY=your_google_api_key
-NEXT_PUBLIC_GOOGLE_APP_ID=your_google_project_id
-
-# Gemini AI (NEW!)
-GEMINI_API_KEY=your_gemini_api_key
+# Gemini AI (for title generation)
+GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
-### Step 4: Get Your API Keys
+**Where to get the keys:**
 
-**Google OAuth & Drive:**
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create project → Enable APIs (Drive API, Google+ API)
-3. Create OAuth 2.0 credentials
-4. Add authorized origins: `https://your-app.vercel.app`
-5. Add redirect URIs: `https://your-app.vercel.app/api/auth/callback/google`
-6. Create API Key for Drive
+  - **Google Keys**: Create a project in the [Google Cloud Console](https://console.cloud.google.com/). Enable the "Google Drive API" and create OAuth 2.0 credentials and an API Key.
+  - **Gemini Key**: Get your key from [Google AI Studio](https://aistudio.google.com/).
+  - **NEXTAUTH\_SECRET**: You can generate a secure secret by running `openssl rand -base64 32` in your terminal.
 
-**Gemini AI:**
-1. Go to [Google AI Studio](https://aistudio.google.com/)
-2. Click "Get API Key"
-3. Copy your key
-4. **Note:** Free tier provides 1000 requests per day for title generation
+Once the variables are added, **re-deploy** your application for the changes to take effect.
 
-### Step 5: Deploy!
-
-Vercel will automatically:
-- Install dependencies (including Prisma)
-- Run `prisma generate`
-- Push your database schema
-- Deploy your app! 🎉
+-----
 
 ## 💻 Local Development
 
+To run the application on your local machine, follow these steps.
+
+### 1\. Clone the Repository
+
 ```bash
-# Clone and install
 git clone https://github.com/KiranWelisa/assemblyai-transcription-app.git
 cd assemblyai-transcription-app
+```
+
+### 2\. Install Dependencies
+
+```bash
 npm install
+```
 
-# Setup environment variables
+### 3\. Set Up Environment Variables
+
+Copy the example environment file and fill in your own API keys and database URL.
+
+```bash
 cp .env.example .env.local
-# Edit .env.local with your keys
+```
 
-# Setup Prisma database
+### 4\. Set Up the Database
+
+Run the following commands to generate the Prisma client and push the database schema.
+
+```bash
 npx prisma generate
 npx prisma db push
+```
 
-# Start development server
+### 5\. Run the Development Server
+
+```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000)
-
-### Environment Variables
-
-```env
-# Google OAuth (required)
-NEXT_PUBLIC_GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_client_secret
-
-# NextAuth (required)
-NEXTAUTH_SECRET=your_nextauth_secret
-NEXTAUTH_URL=http://localhost:3000
-
-# Google Drive (required)
-NEXT_PUBLIC_GOOGLE_API_KEY=your_api_key
-NEXT_PUBLIC_GOOGLE_APP_ID=your_project_id
-
-# Gemini AI (required for title generation)
-GEMINI_API_KEY=your_gemini_key
-
-# Prisma Postgres (required)
-POSTGRES_URL=your_postgres_url
-DATABASE_URL=your_database_url
-```
-
-## 📁 Project Structure
-
-```
-assemblyai-transcription-app/
-├── prisma/
-│   └── schema.prisma        # Database schema
-├── lib/
-│   ├── prisma.js           # Prisma client
-│   └── gemini-queue.js     # AI title generation with rate limiting
-├── pages/
-│   ├── _document.js        # Google Identity Services
-│   ├── index.js            # Main page
-│   └── api/
-│       ├── auth/           # NextAuth & Google One Tap
-│       ├── drive/          # Drive file permissions
-│       └── transcriptions/ # Database API endpoints
-├── components/
-│   └── AssemblyAITranscription.js # Main React component
-└── package.json
-```
-
-## 🛠 How It Works
-
-### Transcription Flow
-
-```
-1. User uploads file or URL
-   ↓
-2. AssemblyAI transcribes (with speaker diarization)
-   ↓
-3. Transcript displayed immediately ✅
-   ↓
-4. Metadata saved to database
-   ↓
-5. [Background] Gemini analyzes transcript (queued with rate limiting)
-   - Extracts: 200 start + 200 middle + 200 end words
-   - Generates: "Q4 Planning Meeting" (max 60 chars)
-   - Automatic retry with exponential backoff if rate limited
-   ↓
-6. Title updated in database
-   ↓
-7. UI polls and shows new title (2-5 seconds) ✨
-```
-
-### Rate Limiting Strategy
-
-The app uses an intelligent queue system for Gemini API calls:
-
-- **Daily quota tracking:** Monitors usage against 1000 requests/day limit
-- **Per-minute rate limiting:** Respects 15 requests per minute
-- **Exponential backoff:** Retries failed requests (5s → 10s → 20s → 40s → 60s)
-- **Graceful degradation:** Falls back to filename-based titles when quota exhausted
-- **Automatic reset:** Daily quota resets at midnight Pacific Time
-
-### Why This Approach?
-
-- **Fast UX**: Transcript shows immediately, title appears moments later
-- **Smart Sampling**: 200+200+200 words captures context without sending entire transcript
-- **Cost Efficient**: Only ~600 words to Gemini instead of thousands
-- **Resilient**: Handles API errors gracefully with automatic retries
-- **Fallback**: Generates decent titles even when AI quota is exhausted
-
-## 🔐 Security Features
-
-- **Server-side tokens**: All API keys stay on server
-- **Auto token refresh**: No expired session interruptions
-- **Temporary Drive access**: Files only public during upload
-- **User isolation**: Each user sees only their transcriptions
-- **Secure database**: Row-level security with email verification
-
-## 🎵 Supported Formats
-
-**Audio**: MP3, WAV, AAC, FLAC, OGG, M4A, OPUS, AMR, WMA  
-**Video**: MP4, MOV, WebM, MTS, MXF  
-**Max size**: 2.2GB
-
-## 🔧 Database Schema
-
-```prisma
-model Transcription {
-  id              String   @id @default(cuid())
-  assemblyAiId    String   @unique       // Links to AssemblyAI
-  userEmail       String                 // Owner
-  title           String?                // AI-generated title
-  titleGenerating Boolean  @default(true)
-  fileName        String?
-  language        String?
-  duration        Float?
-  wordCount       Int?
-  createdAt       DateTime @default(now())
-}
-```
-
-**What we DON'T store:**
-- ❌ Full transcript text (always fetched from AssemblyAI)
-- ❌ Audio files (stored in Drive or AssemblyAI)
-- ❌ Utterances or timestamps
-
-This keeps the database lightweight and respects data ownership!
-
-## 🚀 Performance
-
-- **First transcription view**: < 500ms (metadata from DB)
-- **Title generation**: 2-5 seconds (background, non-blocking)
-- **Past transcriptions load**: < 200ms (Postgres query)
-- **Full transcript load**: ~1 second (AssemblyAI API call)
-- **Daily AI title quota**: 1000 titles per day (free tier)
-
-## 🔧 API Quota Monitoring
-
-Monitor your Gemini API usage at: `/api/gemini/status`
-
-Returns:
-```json
-{
-  "queue": {
-    "queueLength": 0,
-    "processing": false,
-    "dailyUsage": 47,
-    "dailyRemaining": 953,
-    "quotaExhausted": false
-  }
-}
-```
-
-## 📝 License
-
-MIT License
-
-## 🤝 Support
-
-- [AssemblyAI Docs](https://www.assemblyai.com/docs)
-- [Gemini API Docs](https://ai.google.dev/docs)
-- [Prisma Docs](https://www.prisma.io/docs)
-- [Create an Issue](https://github.com/KiranWelisa/assemblyai-transcription-app/issues)
-
----
-
-Made with ❤️ • Powered by AssemblyAI, Gemini 2.5 Flash Lite & Vercel Postgres
+Your application will be available at [http://localhost:3000](https://www.google.com/search?q=http://localhost:3000).
