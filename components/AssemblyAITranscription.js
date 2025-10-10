@@ -712,7 +712,17 @@ const AssemblyAITranscription = () => {
 
   const isTranscriptionDisabled = (!audioUrl && !driveFile) || !['idle', 'completed', 'error'].includes(transcriptionStatus);
 
-  if (!session) {
+  // Handle session loading state
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="w-12 h-12 animate-spin text-blue-500" />
+      </div>
+    );
+  }
+
+  // Handle unauthenticated state
+  if (status === "unauthenticated") {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center p-4">
         <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 max-w-md w-full">
@@ -735,6 +745,7 @@ const AssemblyAITranscription = () => {
     );
   }
 
+  // At this point, session and session.user are guaranteed to exist
   if (!apiKey) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center p-4">
@@ -797,7 +808,6 @@ const AssemblyAITranscription = () => {
               <p className="text-xs text-gray-500 dark:text-gray-400">Powered by AssemblyAI</p>
             </div>
           </div>
-          
           <div className="flex items-center gap-3">
             <button
               onClick={toggleDarkMode}
@@ -806,7 +816,6 @@ const AssemblyAITranscription = () => {
             >
               {darkMode ? <Sun className="w-5 h-5 text-gray-600 dark:text-gray-300" /> : <Moon className="w-5 h-5 text-gray-600" />}
             </button>
-            
             <button
               onClick={() => setShowSettings(true)}
               className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
@@ -814,8 +823,8 @@ const AssemblyAITranscription = () => {
             >
               <Settings className="w-5 h-5 text-gray-600 dark:text-gray-300" />
             </button>
-            
             <div className="flex items-center gap-2 pl-3 border-l border-gray-200 dark:border-gray-700">
+              {/* Safe to access session.user.image and session.user.name here */}
               <img src={session.user.image} alt="Profile" className="w-8 h-8 rounded-full" />
               <span className="text-sm font-medium text-gray-700 dark:text-gray-300 hidden sm:block">{session.user.name}</span>
             </div>
