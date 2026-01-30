@@ -11,6 +11,8 @@
     "postinstall": "prisma generate"
   },
   "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.10",
+    "@ffmpeg/util": "^0.12.1",
     "@google/generative-ai": "^0.21.0",
     "@prisma/client": "^5.20.0",
     "@vercel/functions": "^1.4.1",

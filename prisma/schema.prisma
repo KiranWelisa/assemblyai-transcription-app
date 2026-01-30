@@ -22,11 +22,22 @@ model Transcription {
   wordCount         Int?
   preview           String?
   tags              String[] @default([])
+
+  // NEW badge system
+  isNew             Boolean  @default(true)
+  viewedAt          DateTime?
+
+  // Extracted metadata for smart titles
+  companyNames      String[] @default([])
+  personNames       String[] @default([])
+  meetingType       String?  // interview, meeting, presentation, call, other
+
   assemblyCreatedAt DateTime? // Date from AssemblyAI when transcript was created
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   @@index([userEmail])
+  @@index([userEmail, isNew])
   @@index([createdAt(sort: Desc)])
   @@map("transcriptions")
 }

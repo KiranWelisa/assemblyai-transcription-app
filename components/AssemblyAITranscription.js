@@ -1,7 +1,12 @@
 // components/AssemblyAITranscription.js
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Link, Loader2, User, X, File, Copy, Check, Download, Settings, Moon, Sun, Search, SlidersHorizontal, Tag as TagIcon, Plus, Sparkles, RefreshCw, ChevronDown, Filter, Trash2, AlertTriangle } from 'lucide-react';
+import { Upload, Link, Loader2, User, X, File, Copy, Check, Download, Settings, Moon, Sun, Search, SlidersHorizontal, Tag as TagIcon, Plus, Sparkles, RefreshCw, ChevronDown, Filter, Trash2, AlertTriangle, Clock } from 'lucide-react';
 import { useSession, signIn, signOut } from 'next-auth/react';
+import DropZone from './upload/DropZone';
+import TranscriptionCard from './transcriptions/TranscriptionCard';
+import RecentlyAdded from './transcriptions/RecentlyAdded';
+import ActiveTranscription from './transcriptions/ActiveTranscription';
+import NewBadge from './transcriptions/NewBadge';
 
 const AssemblyAITranscription = () => {
   const { data: session, status, update } = useSession();
@@ -34,8 +39,14 @@ const AssemblyAITranscription = () => {
   const [syncProgress, setSyncProgress] = useState({ synced: 0, total: 0 });
   const [copied, setCopied] = useState(false);
   const [processingTitles, setProcessingTitles] = useState(false);
-  
+  const [transcriptionStartTime, setTranscriptionStartTime] = useState(null);
+  const [pollCount, setPollCount] = useState(0);
+  const [activeFileName, setActiveFileName] = useState('');
+  const [compressionStatus, setCompressionStatus] = useState({ active: false, progress: 0 });
+
   const pickerLoadedRef = useRef(false);
+  const ffmpegRef = useRef(null);
+  const ffmpegLoadingRef = useRef(false);
   const oneTapRef = useRef(false);
   const titlePollingRef = useRef(null);
   const backgroundPollingRef = useRef(null);
@@ -482,10 +493,165 @@ const AssemblyAITranscription = () => {
     };
   }, []);
 
+  // Video types that need compression
+  const VIDEO_MIMETYPES = ['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime', 'video/x-msvideo', 'video/x-ms-wmv', 'video/x-flv', 'video/x-matroska'];
+
+  const isVideoFile = (mimeType, fileName) => {
+    if (VIDEO_MIMETYPES.includes(mimeType)) return true;
+    const ext = fileName?.split('.').pop()?.toLowerCase();
+    return ['mp4', 'mkv', 'mov', 'avi', 'wmv', 'flv', 'webm'].includes(ext);
+  };
+
+  // Load FFmpeg from CDN (avoids Next.js bundling issues)
+  const loadFFmpeg = async () => {
+    if (ffmpegRef.current) return ffmpegRef.current;
+    if (ffmpegLoadingRef.current) {
+      // Wait for existing load
+      while (ffmpegLoadingRef.current) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return ffmpegRef.current;
+    }
+
+    ffmpegLoadingRef.current = true;
+    try {
+      // Load FFmpeg UMD from CDN
+      if (!document.querySelector('script[src*="ffmpeg.js"]')) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js';
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+
+      const FFmpegWASM = window.FFmpegWASM;
+      if (!FFmpegWASM?.FFmpeg) throw new Error('FFmpeg not loaded');
+
+      const ffmpeg = new FFmpegWASM.FFmpeg();
+      ffmpeg.on('log', ({ message }) => console.log('[FFmpeg]', message));
+
+      // Load WASM core
+      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+      const toBlobURL = async (url, type) => {
+        const res = await fetch(url);
+        const blob = await res.blob();
+        return URL.createObjectURL(new Blob([blob], { type }));
+      };
+
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+      });
+
+      ffmpegRef.current = ffmpeg;
+      return ffmpeg;
+    } finally {
+      ffmpegLoadingRef.current = false;
+    }
+  };
+
+  // Download file from Google Drive
+  const downloadFromDrive = async (fileId) => {
+    if (!session?.accessToken) throw new Error('Not authenticated');
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: { 'Authorization': `Bearer ${session.accessToken}` }
+    });
+    if (!response.ok) throw new Error('Failed to download file from Drive');
+    return await response.arrayBuffer();
+  };
+
+  // Upload file to Google Drive (resumable)
+  const uploadToDrive = async (fileData, fileName, mimeType) => {
+    if (!session?.accessToken) throw new Error('Not authenticated');
+
+    // Initialize upload
+    const initRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name: fileName, mimeType }),
+    });
+
+    if (!initRes.ok) throw new Error('Failed to initialize upload');
+    const uploadUrl = initRes.headers.get('Location');
+
+    // Upload file
+    const uploadRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': mimeType },
+      body: fileData,
+    });
+
+    if (!uploadRes.ok) throw new Error('Failed to upload file');
+    return await uploadRes.json();
+  };
+
+  // Compress video to MP3
+  const compressVideoToMp3 = async (fileId, fileName) => {
+    setCompressionStatus({ active: true, progress: 0 });
+
+    try {
+      // 1. Load FFmpeg
+      setStatusMessage('Loading video compressor...');
+      const ffmpeg = await loadFFmpeg();
+      if (!ffmpeg) throw new Error('Failed to load FFmpeg');
+
+      // 2. Download video from Drive
+      setStatusMessage('Downloading video from Drive...');
+      setCompressionStatus({ active: true, progress: 10 });
+      const videoData = await downloadFromDrive(fileId);
+
+      // 3. Write to FFmpeg filesystem
+      setCompressionStatus({ active: true, progress: 20 });
+      const inputName = 'input' + fileName.substring(fileName.lastIndexOf('.'));
+      await ffmpeg.writeFile(inputName, new Uint8Array(videoData));
+
+      // 4. Set up progress tracking
+      ffmpeg.on('progress', ({ progress }) => {
+        const overallProgress = 20 + Math.round(progress * 60); // 20-80%
+        setCompressionStatus({ active: true, progress: overallProgress });
+        setStatusMessage(`Compressing to MP3... ${Math.round(progress * 100)}%`);
+      });
+
+      // 5. Convert to MP3 128kbps
+      const outputName = fileName.replace(/\.[^/.]+$/, '') + '.mp3';
+      await ffmpeg.exec([
+        '-i', inputName,
+        '-vn', '-acodec', 'libmp3lame',
+        '-ab', '128k', '-ar', '44100', '-ac', '2',
+        outputName
+      ]);
+
+      // 6. Read output
+      setCompressionStatus({ active: true, progress: 85 });
+      setStatusMessage('Uploading compressed file...');
+      const data = await ffmpeg.readFile(outputName);
+      const mp3Data = new Blob([data.buffer || data], { type: 'audio/mpeg' });
+
+      // 7. Upload compressed MP3 to Drive
+      const uploadedFile = await uploadToDrive(mp3Data, outputName, 'audio/mpeg');
+
+      // 8. Cleanup
+      await ffmpeg.deleteFile(inputName);
+      await ffmpeg.deleteFile(outputName);
+
+      setCompressionStatus({ active: true, progress: 100 });
+      return { id: uploadedFile.id, name: outputName, mimeType: 'audio/mpeg' };
+    } finally {
+      setCompressionStatus({ active: false, progress: 0 });
+    }
+  };
+
   const pollTranscriptionStatus = async (transcriptId) => {
     if (!apiKey) return;
+    setPollCount(0);
     for (let i = 0; i < 200; i++) {
-      setStatusMessage(`Polling for status... Attempt ${i + 1}`);
+      setPollCount(i + 1);
+      setStatusMessage(`Transcribing... ${i + 1}`);
       const response = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
         headers: { 'Authorization': apiKey }
       });
@@ -503,15 +669,34 @@ const AssemblyAITranscription = () => {
     setError(null);
     setCurrentTranscript(null);
     setCurrentTranscriptionId(null);
+    setTranscriptionStartTime(Date.now());
+    setPollCount(0);
     let finalAudioUrl = audioUrl;
     let localDriveFile = driveFile;
     let localPermissionId = null;
+    let compressedFileId = null; // Track compressed file for cleanup
     const fileName = driveFile ? driveFile.name : audioUrl.split('/').pop();
+    setActiveFileName(fileName);
 
     try {
       if (localDriveFile) {
+        // Check if this is a video file that needs compression
+        if (isVideoFile(localDriveFile.mimeType, localDriveFile.name)) {
+          setTranscriptionStatus('publishing');
+          setStatusMessage('Video detected - compressing to MP3...');
+          try {
+            const compressedFile = await compressVideoToMp3(localDriveFile.id, localDriveFile.name);
+            localDriveFile = compressedFile;
+            compressedFileId = compressedFile.id; // Store for cleanup
+            setActiveFileName(compressedFile.name);
+          } catch (compressError) {
+            console.error('Compression failed:', compressError);
+            throw new Error(`Failed to compress video: ${compressError.message}`);
+          }
+        }
+
         setTranscriptionStatus('publishing');
-        setStatusMessage('Preparing file from Google Drive...');
+        setStatusMessage('Preparing file...');
         const response = await fetch('/api/drive/make-public', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -598,6 +783,18 @@ const AssemblyAITranscription = () => {
           console.error('CRITICAL: Failed to revoke file permission:', revokeError);
         }
       }
+      // Delete compressed temporary file from Drive
+      if (compressedFileId && session?.accessToken) {
+        try {
+          await fetch(`https://www.googleapis.com/drive/v3/files/${compressedFileId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${session.accessToken}` },
+          });
+          console.log('Cleaned up compressed temporary file');
+        } catch (deleteError) {
+          console.error('Failed to delete compressed file:', deleteError);
+        }
+      }
       setDriveFile(null);
     }
   };
@@ -626,12 +823,29 @@ const AssemblyAITranscription = () => {
       const response = await fetch(`/api/assemblyai/transcript/${transcription.assemblyAiId}`, {
         headers: { 'x-assemblyai-key': apiKey }
       });
-      
+
       if (!response.ok) throw new Error('Failed to load transcript');
       const transcript = await response.json();
-      
+
       setSelectedTranscript({ ...transcription, fullTranscript: transcript });
       setShowModal(true);
+
+      // Mark as viewed if it's a new transcription
+      if (transcription.isNew) {
+        try {
+          await fetch(`/api/transcriptions/${transcription.id}/mark-viewed`, {
+            method: 'POST'
+          });
+          // Update local state
+          setPastTranscriptions(prev =>
+            prev.map(t =>
+              t.id === transcription.id ? { ...t, isNew: false, viewedAt: new Date().toISOString() } : t
+            )
+          );
+        } catch (err) {
+          console.error('Failed to mark as viewed:', err);
+        }
+      }
     } catch (err) {
       setError(`Error loading transcription: ${err.message}`);
     }
@@ -834,99 +1048,169 @@ const AssemblyAITranscription = () => {
 
       {/* Main Content */}
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* New Transcription Section */}
-        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-            <Upload className="w-5 h-5" />
-            New Transcription
-          </h2>
-          
-          {driveFile ? (
-            <div className="flex items-center justify-between p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl mb-4">
-              <div className="flex items-center gap-3 overflow-hidden">
-                <File className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-                <span className="font-medium text-blue-900 dark:text-blue-100 truncate">{driveFile.name}</span>
-              </div>
-              <button onClick={() => setDriveFile(null)} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center gap-2 mb-4">
-                <input
-                  type="text"
-                  value={audioUrl}
-                  onChange={(e) => setAudioUrl(e.target.value)}
-                  placeholder="Paste a public media URL here..."
-                  className="flex-1 p-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              
-              <div className="relative flex py-4 items-center">
-                <div className="flex-grow border-t border-gray-300 dark:border-gray-600"></div>
-                <span className="flex-shrink mx-4 text-sm text-gray-500 dark:text-gray-400">OR</span>
-                <div className="flex-grow border-t border-gray-300 dark:border-gray-600"></div>
-              </div>
-              
-              <button
-                onClick={handleChooseFromDrive}
-                className="w-full bg-white dark:bg-gray-700 border-2 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 py-3 px-4 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-all flex items-center justify-center gap-2 font-medium"
-              >
-                <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none"><path d="M7.75 22.5L1.5 12L7.75 1.5H20.5L24 7.5L17.75 18L13.75 11.25L7.75 22.5Z" fill="#2684FC"></path><path d="M1.5 12L4.625 17.25L10.875 6.75L7.75 1.5L1.5 12Z" fill="#00A85D"></path><path d="M20.5 1.5L13.75 11.25L17.75 18L24 7.5L20.5 1.5Z" fill="#FFC107"></path></svg>
-                Choose from Google Drive
-              </button>
-            </>
-          )}
-          
-          {error && <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-400 text-sm">{error}</div>}
-          
-          <button
-            onClick={startTranscription}
-            disabled={isTranscriptionDisabled}
-            className="mt-4 w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 px-6 rounded-xl hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-500 flex items-center justify-center gap-2 transition-all font-medium shadow-lg disabled:shadow-none"
-          >
-            {transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error' ? 
-              <Loader2 className="w-5 h-5 animate-spin" /> : 
+        {/* Top Section: Upload + Recently Added/Active Transcription side by side */}
+        {(() => {
+          const hasNewItems = pastTranscriptions.some(t => t.isNew && t.duration !== null);
+          const hasActiveTranscription = (transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error') || compressionStatus.active;
+          const showRightColumn = hasNewItems || hasActiveTranscription;
+          return (
+        <div className={`grid gap-6 mb-8 ${showRightColumn ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'}`}>
+          {/* New Transcription Section with DropZone */}
+          <div className={`bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 ${!showRightColumn ? 'max-w-3xl mx-auto w-full' : ''}`}>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
               <Upload className="w-5 h-5" />
-            }
-            {transcriptionStatus !== 'idle' ? statusMessage : 'Start Transcription'}
-          </button>
-        </div>
+              New Transcription
+            </h2>
 
-        {/* Search & Filter Bar */}
-        <div className="flex flex-col sm:flex-row gap-4 mb-6">
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search transcriptions..."
-              className="w-full pl-10 pr-4 py-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+            {/* Drag & Drop Zone */}
+            <DropZone
+              session={session}
+              disabled={transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error'}
+              onFileSelect={(file) => {
+                setDriveFile(file);
+                setAudioUrl('');
+                setError(null);
+              }}
+              onUploadComplete={(file) => {
+                // Auto-start transcription after successful upload
+                setDriveFile(file);
+                setTimeout(() => startTranscription(), 500);
+              }}
+            />
+
+            {/* OR divider */}
+            <div className="relative flex py-4 items-center">
+              <div className="flex-grow border-t border-gray-300 dark:border-gray-600"></div>
+              <span className="flex-shrink mx-4 text-sm text-gray-500 dark:text-gray-400">OR</span>
+              <div className="flex-grow border-t border-gray-300 dark:border-gray-600"></div>
+            </div>
+
+            {/* Selected file or Drive picker */}
+            <div className="space-y-3">
+              {driveFile ? (
+                <div className="flex items-center justify-between p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl">
+                  <div className="flex items-center gap-3 overflow-hidden">
+                    <File className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                    <span className="font-medium text-blue-900 dark:text-blue-100 truncate">{driveFile.name}</span>
+                  </div>
+                  <button onClick={() => setDriveFile(null)} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleChooseFromDrive}
+                  className="w-full bg-white dark:bg-gray-700 border-2 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 py-2.5 px-4 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-all flex items-center justify-center gap-2 font-medium text-sm"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none"><path d="M7.75 22.5L1.5 12L7.75 1.5H20.5L24 7.5L17.75 18L13.75 11.25L7.75 22.5Z" fill="#2684FC"></path><path d="M1.5 12L4.625 17.25L10.875 6.75L7.75 1.5L1.5 12Z" fill="#00A85D"></path><path d="M20.5 1.5L13.75 11.25L17.75 18L24 7.5L20.5 1.5Z" fill="#FFC107"></path></svg>
+                  Or choose from Google Drive
+                </button>
+              )}
+            </div>
+
+            {error && <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-400 text-sm">{error}</div>}
+
+            {driveFile && (
+              <button
+                onClick={startTranscription}
+                disabled={!driveFile || !['idle', 'completed', 'error'].includes(transcriptionStatus)}
+                className="mt-4 w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 px-6 rounded-xl hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-500 flex items-center justify-center gap-2 transition-all font-medium shadow-lg disabled:shadow-none"
+              >
+                {transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error' ?
+                  <Loader2 className="w-5 h-5 animate-spin" /> :
+                  <Upload className="w-5 h-5" />
+                }
+                {transcriptionStatus !== 'idle' ? statusMessage : 'Start Transcription'}
+              </button>
+            )}
+          </div>
+
+          {/* Right column: Active Transcription and/or Recently Added */}
+          <div className="space-y-4">
+            {/* Active Transcription Progress */}
+            {(transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error') || compressionStatus.active ? (
+              <ActiveTranscription
+                status={transcriptionStatus}
+                fileName={activeFileName}
+                pollCount={pollCount}
+                startTime={transcriptionStartTime}
+                compressionStatus={compressionStatus}
+              />
+            ) : null}
+
+            {/* Recently Added Section */}
+            <RecentlyAdded
+              transcriptions={pastTranscriptions}
+              onSelect={loadTranscript}
+              onClearAll={async () => {
+                try {
+                  await fetch('/api/transcriptions/mark-all-viewed', { method: 'POST' });
+                  // Update local state
+                  setPastTranscriptions(prev =>
+                    prev.map(t => t.isNew ? { ...t, isNew: false, viewedAt: new Date().toISOString() } : t)
+                  );
+                } catch (err) {
+                  console.error('Failed to clear all:', err);
+                }
+              }}
+              formatDate={formatDate}
+              maxItems={5}
             />
           </div>
-          
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
-            className="px-4 py-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="date">Sort by Date</option>
-            <option value="duration">Sort by Duration</option>
-            <option value="alphabetical">Sort A-Z</option>
-          </select>
-          
-          {allTags.length > 0 && (
+        </div>
+          );
+        })()}
+
+        {/* Section Header with Search & Filter */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+              All Transcriptions
+            </h2>
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              {filteredTranscriptions.length} items
+            </span>
+            {pastTranscriptions.filter(t => t.isNew).length > 0 && (
+              <span className="flex items-center gap-1 text-sm text-emerald-600 dark:text-emerald-400">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                {pastTranscriptions.filter(t => t.isNew).length} new
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+            <div className="flex-1 sm:flex-initial relative min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search..."
+                className="w-full pl-9 pr-4 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              />
+            </div>
+
             <select
-              value={filterTag || ''}
-              onChange={(e) => setFilterTag(e.target.value || null)}
-              className="px-4 py-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm"
             >
-              <option value="">All Tags</option>
-              {allTags.map(tag => <option key={tag} value={tag}>{tag}</option>)}
+              <option value="date">Date</option>
+              <option value="duration">Duration</option>
+              <option value="alphabetical">A-Z</option>
             </select>
-          )}
+
+            {allTags.length > 0 && (
+              <select
+                value={filterTag || ''}
+                onChange={(e) => setFilterTag(e.target.value || null)}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              >
+                <option value="">All Languages</option>
+                {allTags.map(tag => <option key={tag} value={tag}>{tag}</option>)}
+              </select>
+            )}
+          </div>
         </div>
 
         {/* Transcriptions Grid */}
@@ -940,51 +1224,20 @@ const AssemblyAITranscription = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
-            {filteredTranscriptions.map((transcription) => (
+            {filteredTranscriptions.map((transcription, index) => (
               <div
                 key={transcription.id}
-                onClick={() => loadTranscript(transcription)}
-                className="bg-white dark:bg-gray-800 rounded-2xl shadow-md hover:shadow-2xl transition-all duration-300 cursor-pointer overflow-hidden group hover:scale-[1.02]"
+                className="grid-item-enter"
+                style={{ animationDelay: `${Math.min(index * 50, 300)}ms` }}
               >
-                <div className="p-6">
-                  <div className="flex items-start justify-between mb-3">
-                    {transcription.titleGenerating ? (
-                      <div className="flex-1">
-                        <div className="h-6 bg-gradient-to-r from-blue-200 via-blue-300 to-blue-200 dark:from-blue-800 dark:via-blue-700 dark:to-blue-800 rounded animate-shimmer bg-[length:200%_100%] mb-1"></div>
-                        <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400">
-                          <Sparkles className="w-3 h-3 animate-pulse" />
-                          <span className="animate-pulse">Generating title...</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white line-clamp-2 flex-1">
-                        {transcription.title || 'Untitled Transcription'}
-                      </h3>
-                    )}
-                  </div>
-                  
-                  <div className="flex items-center gap-2 mb-4 text-sm text-gray-600 dark:text-gray-400">
-                    <span className="flex items-center gap-1">
-                      {getLanguageEmoji(transcription.language)}
-                      {getLanguageTag(transcription.language)}
-                    </span>
-                    <span>•</span>
-                    <span>{formatTime(transcription.duration || 0)}</span>
-                  </div>
-                  
-                  <div className="relative h-20 overflow-hidden">
-                    <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-3">
-                      {transcription.preview || 'Click to load transcript...'}
-                    </p>
-                    <div className="absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-white dark:from-gray-800 to-transparent"></div>
-                  </div>
-                  
-                  <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                      {formatDate(transcription.assemblyCreatedAt || transcription.createdAt)}
-                    </div>
-                  </div>
-                </div>
+                <TranscriptionCard
+                  transcription={transcription}
+                  onClick={loadTranscript}
+                  formatTime={formatTime}
+                  formatDate={formatDate}
+                  getLanguageEmoji={getLanguageEmoji}
+                  getLanguageTag={getLanguageTag}
+                />
               </div>
             ))}
           </div>

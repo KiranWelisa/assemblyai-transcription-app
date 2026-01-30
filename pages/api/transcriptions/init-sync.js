@@ -96,6 +96,13 @@ export default async function handler(req, res) {
       duration: null,
       wordCount: null,
       preview: 'Loading transcript data...',
+      // NEW badge fields
+      isNew: true,
+      viewedAt: null,
+      // Smart title metadata
+      companyNames: [],
+      personNames: [],
+      meetingType: null,
     }));
 
     await prisma.transcription.createMany({

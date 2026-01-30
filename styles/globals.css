@@ -144,3 +144,96 @@ body {
   background: rgba(0, 0, 0, 0.2);
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
+
+/* NEW badge glow animation */
+@keyframes newGlow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0);
+  }
+}
+
+.animate-new-glow {
+  animation: newGlow 2s ease-in-out infinite;
+}
+
+/* Card with NEW indicator */
+.card-new {
+  position: relative;
+}
+
+.card-new::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #10b981, #14b8a6, #06b6d4);
+  border-radius: 0.75rem 0.75rem 0 0;
+}
+
+/* Drag & drop zone animations */
+@keyframes dropPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.02);
+    opacity: 0.8;
+  }
+}
+
+.animate-drop-pulse {
+  animation: dropPulse 1s ease-in-out infinite;
+}
+
+/* Upload progress animation */
+@keyframes progressStripe {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 40px 0;
+  }
+}
+
+.progress-stripe {
+  background-image: linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.15) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(255, 255, 255, 0.15) 50%,
+    rgba(255, 255, 255, 0.15) 75%,
+    transparent 75%,
+    transparent
+  );
+  background-size: 40px 40px;
+  animation: progressStripe 1s linear infinite;
+}
+
+/* Subtle entrance animation for grid items */
+@keyframes gridItemEnter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.grid-item-enter {
+  animation: gridItemEnter 0.3s ease-out forwards;
+}
+
+/* Staggered delay classes */
+.delay-75 { animation-delay: 75ms; }
+.delay-150 { animation-delay: 150ms; }
+.delay-225 { animation-delay: 225ms; }
+.delay-300 { animation-delay: 300ms; }
