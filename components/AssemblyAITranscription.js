@@ -1,7 +1,11 @@
 // components/AssemblyAITranscription.js
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Link, Loader2, User, X, File, Copy, Check, Download, Settings, Moon, Sun, Search, SlidersHorizontal, Tag as TagIcon, Plus, Sparkles, RefreshCw, ChevronDown, Filter, Trash2, AlertTriangle } from 'lucide-react';
+import { Upload, Link, Loader2, User, X, File, Copy, Check, Download, Settings, Moon, Sun, Search, SlidersHorizontal, Tag as TagIcon, Plus, Sparkles, RefreshCw, ChevronDown, Filter, Trash2, AlertTriangle, Clock } from 'lucide-react';
 import { useSession, signIn, signOut } from 'next-auth/react';
+import DropZone from './upload/DropZone';
+import TranscriptionCard from './transcriptions/TranscriptionCard';
+import RecentlyAdded from './transcriptions/RecentlyAdded';
+import NewBadge from './transcriptions/NewBadge';
 
 const AssemblyAITranscription = () => {
   const { data: session, status, update } = useSession();
@@ -626,12 +630,29 @@ const AssemblyAITranscription = () => {
       const response = await fetch(`/api/assemblyai/transcript/${transcription.assemblyAiId}`, {
         headers: { 'x-assemblyai-key': apiKey }
       });
-      
+
       if (!response.ok) throw new Error('Failed to load transcript');
       const transcript = await response.json();
-      
+
       setSelectedTranscript({ ...transcription, fullTranscript: transcript });
       setShowModal(true);
+
+      // Mark as viewed if it's a new transcription
+      if (transcription.isNew) {
+        try {
+          await fetch(`/api/transcriptions/${transcription.id}/mark-viewed`, {
+            method: 'POST'
+          });
+          // Update local state
+          setPastTranscriptions(prev =>
+            prev.map(t =>
+              t.id === transcription.id ? { ...t, isNew: false, viewedAt: new Date().toISOString() } : t
+            )
+          );
+        } catch (err) {
+          console.error('Failed to mark as viewed:', err);
+        }
+      }
     } catch (err) {
       setError(`Error loading transcription: ${err.message}`);
     }
@@ -834,99 +855,149 @@ const AssemblyAITranscription = () => {
 
       {/* Main Content */}
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* New Transcription Section */}
-        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-            <Upload className="w-5 h-5" />
-            New Transcription
-          </h2>
-          
-          {driveFile ? (
-            <div className="flex items-center justify-between p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl mb-4">
-              <div className="flex items-center gap-3 overflow-hidden">
-                <File className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-                <span className="font-medium text-blue-900 dark:text-blue-100 truncate">{driveFile.name}</span>
-              </div>
-              <button onClick={() => setDriveFile(null)} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center gap-2 mb-4">
-                <input
-                  type="text"
-                  value={audioUrl}
-                  onChange={(e) => setAudioUrl(e.target.value)}
-                  placeholder="Paste a public media URL here..."
-                  className="flex-1 p-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              
-              <div className="relative flex py-4 items-center">
-                <div className="flex-grow border-t border-gray-300 dark:border-gray-600"></div>
-                <span className="flex-shrink mx-4 text-sm text-gray-500 dark:text-gray-400">OR</span>
-                <div className="flex-grow border-t border-gray-300 dark:border-gray-600"></div>
-              </div>
-              
-              <button
-                onClick={handleChooseFromDrive}
-                className="w-full bg-white dark:bg-gray-700 border-2 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 py-3 px-4 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-all flex items-center justify-center gap-2 font-medium"
-              >
-                <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none"><path d="M7.75 22.5L1.5 12L7.75 1.5H20.5L24 7.5L17.75 18L13.75 11.25L7.75 22.5Z" fill="#2684FC"></path><path d="M1.5 12L4.625 17.25L10.875 6.75L7.75 1.5L1.5 12Z" fill="#00A85D"></path><path d="M20.5 1.5L13.75 11.25L17.75 18L24 7.5L20.5 1.5Z" fill="#FFC107"></path></svg>
-                Choose from Google Drive
-              </button>
-            </>
-          )}
-          
-          {error && <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-400 text-sm">{error}</div>}
-          
-          <button
-            onClick={startTranscription}
-            disabled={isTranscriptionDisabled}
-            className="mt-4 w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 px-6 rounded-xl hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-500 flex items-center justify-center gap-2 transition-all font-medium shadow-lg disabled:shadow-none"
-          >
-            {transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error' ? 
-              <Loader2 className="w-5 h-5 animate-spin" /> : 
+        {/* Top Section: Upload + Recently Added side by side */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          {/* New Transcription Section with DropZone */}
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
               <Upload className="w-5 h-5" />
-            }
-            {transcriptionStatus !== 'idle' ? statusMessage : 'Start Transcription'}
-          </button>
+              New Transcription
+            </h2>
+
+            {/* Drag & Drop Zone */}
+            <DropZone
+              session={session}
+              disabled={transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error'}
+              onFileSelect={(file) => {
+                setDriveFile(file);
+                setAudioUrl('');
+                setError(null);
+              }}
+              onUploadComplete={(file) => {
+                // Auto-start transcription after successful upload
+                setDriveFile(file);
+                setTimeout(() => startTranscription(), 500);
+              }}
+            />
+
+            {/* OR divider */}
+            <div className="relative flex py-4 items-center">
+              <div className="flex-grow border-t border-gray-300 dark:border-gray-600"></div>
+              <span className="flex-shrink mx-4 text-sm text-gray-500 dark:text-gray-400">OR</span>
+              <div className="flex-grow border-t border-gray-300 dark:border-gray-600"></div>
+            </div>
+
+            {/* Alternative options */}
+            <div className="space-y-3">
+              {driveFile ? (
+                <div className="flex items-center justify-between p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl">
+                  <div className="flex items-center gap-3 overflow-hidden">
+                    <File className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                    <span className="font-medium text-blue-900 dark:text-blue-100 truncate">{driveFile.name}</span>
+                  </div>
+                  <button onClick={() => setDriveFile(null)} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={audioUrl}
+                      onChange={(e) => setAudioUrl(e.target.value)}
+                      placeholder="Paste a public media URL..."
+                      className="flex-1 p-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleChooseFromDrive}
+                    className="w-full bg-white dark:bg-gray-700 border-2 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 py-2.5 px-4 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-all flex items-center justify-center gap-2 font-medium text-sm"
+                  >
+                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none"><path d="M7.75 22.5L1.5 12L7.75 1.5H20.5L24 7.5L17.75 18L13.75 11.25L7.75 22.5Z" fill="#2684FC"></path><path d="M1.5 12L4.625 17.25L10.875 6.75L7.75 1.5L1.5 12Z" fill="#00A85D"></path><path d="M20.5 1.5L13.75 11.25L17.75 18L24 7.5L20.5 1.5Z" fill="#FFC107"></path></svg>
+                    Choose from Google Drive
+                  </button>
+                </>
+              )}
+            </div>
+
+            {error && <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-400 text-sm">{error}</div>}
+
+            {(audioUrl || driveFile) && (
+              <button
+                onClick={startTranscription}
+                disabled={isTranscriptionDisabled}
+                className="mt-4 w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 px-6 rounded-xl hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-500 flex items-center justify-center gap-2 transition-all font-medium shadow-lg disabled:shadow-none"
+              >
+                {transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error' ?
+                  <Loader2 className="w-5 h-5 animate-spin" /> :
+                  <Upload className="w-5 h-5" />
+                }
+                {transcriptionStatus !== 'idle' ? statusMessage : 'Start Transcription'}
+              </button>
+            )}
+          </div>
+
+          {/* Recently Added Section */}
+          <RecentlyAdded
+            transcriptions={pastTranscriptions}
+            onSelect={loadTranscript}
+            formatDate={formatDate}
+            maxItems={5}
+          />
         </div>
 
-        {/* Search & Filter Bar */}
-        <div className="flex flex-col sm:flex-row gap-4 mb-6">
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search transcriptions..."
-              className="w-full pl-10 pr-4 py-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-            />
+        {/* Section Header with Search & Filter */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+              All Transcriptions
+            </h2>
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              {filteredTranscriptions.length} items
+            </span>
+            {pastTranscriptions.filter(t => t.isNew).length > 0 && (
+              <span className="flex items-center gap-1 text-sm text-emerald-600 dark:text-emerald-400">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                {pastTranscriptions.filter(t => t.isNew).length} new
+              </span>
+            )}
           </div>
-          
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
-            className="px-4 py-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="date">Sort by Date</option>
-            <option value="duration">Sort by Duration</option>
-            <option value="alphabetical">Sort A-Z</option>
-          </select>
-          
-          {allTags.length > 0 && (
+
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+            <div className="flex-1 sm:flex-initial relative min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search..."
+                className="w-full pl-9 pr-4 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              />
+            </div>
+
             <select
-              value={filterTag || ''}
-              onChange={(e) => setFilterTag(e.target.value || null)}
-              className="px-4 py-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm"
             >
-              <option value="">All Tags</option>
-              {allTags.map(tag => <option key={tag} value={tag}>{tag}</option>)}
+              <option value="date">Date</option>
+              <option value="duration">Duration</option>
+              <option value="alphabetical">A-Z</option>
             </select>
-          )}
+
+            {allTags.length > 0 && (
+              <select
+                value={filterTag || ''}
+                onChange={(e) => setFilterTag(e.target.value || null)}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              >
+                <option value="">All Languages</option>
+                {allTags.map(tag => <option key={tag} value={tag}>{tag}</option>)}
+              </select>
+            )}
+          </div>
         </div>
 
         {/* Transcriptions Grid */}
@@ -940,51 +1011,20 @@ const AssemblyAITranscription = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
-            {filteredTranscriptions.map((transcription) => (
+            {filteredTranscriptions.map((transcription, index) => (
               <div
                 key={transcription.id}
-                onClick={() => loadTranscript(transcription)}
-                className="bg-white dark:bg-gray-800 rounded-2xl shadow-md hover:shadow-2xl transition-all duration-300 cursor-pointer overflow-hidden group hover:scale-[1.02]"
+                className="grid-item-enter"
+                style={{ animationDelay: `${Math.min(index * 50, 300)}ms` }}
               >
-                <div className="p-6">
-                  <div className="flex items-start justify-between mb-3">
-                    {transcription.titleGenerating ? (
-                      <div className="flex-1">
-                        <div className="h-6 bg-gradient-to-r from-blue-200 via-blue-300 to-blue-200 dark:from-blue-800 dark:via-blue-700 dark:to-blue-800 rounded animate-shimmer bg-[length:200%_100%] mb-1"></div>
-                        <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400">
-                          <Sparkles className="w-3 h-3 animate-pulse" />
-                          <span className="animate-pulse">Generating title...</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white line-clamp-2 flex-1">
-                        {transcription.title || 'Untitled Transcription'}
-                      </h3>
-                    )}
-                  </div>
-                  
-                  <div className="flex items-center gap-2 mb-4 text-sm text-gray-600 dark:text-gray-400">
-                    <span className="flex items-center gap-1">
-                      {getLanguageEmoji(transcription.language)}
-                      {getLanguageTag(transcription.language)}
-                    </span>
-                    <span>•</span>
-                    <span>{formatTime(transcription.duration || 0)}</span>
-                  </div>
-                  
-                  <div className="relative h-20 overflow-hidden">
-                    <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-3">
-                      {transcription.preview || 'Click to load transcript...'}
-                    </p>
-                    <div className="absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-white dark:from-gray-800 to-transparent"></div>
-                  </div>
-                  
-                  <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                      {formatDate(transcription.assemblyCreatedAt || transcription.createdAt)}
-                    </div>
-                  </div>
-                </div>
+                <TranscriptionCard
+                  transcription={transcription}
+                  onClick={loadTranscript}
+                  formatTime={formatTime}
+                  formatDate={formatDate}
+                  getLanguageEmoji={getLanguageEmoji}
+                  getLanguageTag={getLanguageTag}
+                />
               </div>
             ))}
           </div>
