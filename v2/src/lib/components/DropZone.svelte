@@ -9,7 +9,7 @@
 	let { accessToken }: Props = $props();
 
 	const dispatch = createEventDispatcher<{
-		transcriptionStart: { fileName: string; assemblyAiId: string };
+		transcriptionStart: { id: string; fileName: string; assemblyAiId: string };
 	}>();
 
 	let isDragOver = $state(false);
@@ -77,7 +77,7 @@
 
 		if (!res.ok) throw new Error('Failed to start transcription');
 		const data = await res.json();
-		return data.assemblyAiId;
+		return { id: data.id, assemblyAiId: data.assemblyAiId };
 	}
 
 	// Handle file upload
@@ -104,10 +104,10 @@
 
 			// Start transcription
 			uploadStatus = 'transcribing';
-			const assemblyAiId = await startTranscription(audioUrl, file.name, fileId);
+			const { id, assemblyAiId } = await startTranscription(audioUrl, file.name, fileId);
 			uploadProgress = 100;
 
-			dispatch('transcriptionStart', { fileName: file.name, assemblyAiId });
+			dispatch('transcriptionStart', { id, fileName: file.name, assemblyAiId });
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Upload failed';
 		} finally {

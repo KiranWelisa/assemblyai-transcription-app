@@ -76,12 +76,12 @@
 
 	const newCount = $derived(transcriptions.filter((t) => t.isNew).length);
 
-	function handleTranscriptionStart(event: CustomEvent<{ fileName: string; assemblyAiId: string }>) {
-		const { fileName, assemblyAiId } = event.detail;
+	function handleTranscriptionStart(event: CustomEvent<{ id: string; fileName: string; assemblyAiId: string }>) {
+		const { id, fileName, assemblyAiId } = event.detail;
 
-		// Add to local list immediately
+		// Add to local list immediately with server-generated ID
 		const newTranscription: Transcription = {
-			id: crypto.randomUUID(),
+			id,
 			assemblyAiId,
 			userEmail: data.user!.email,
 			title: null,
