@@ -10,20 +10,18 @@
 
 	const dispatch = createEventDispatcher<{
 		transcriptionStart: { fileName: string; assemblyAiId: string };
-		compressionProgress: { progress: number };
 	}>();
 
 	let isDragOver = $state(false);
 	let isUploading = $state(false);
 	let uploadProgress = $state(0);
-	let uploadStatus = $state<'idle' | 'compressing' | 'uploading' | 'transcribing'>('idle');
+	let uploadStatus = $state<'idle' | 'uploading' | 'transcribing'>('idle');
 	let error = $state<string | null>(null);
-	let ffmpegRef = $state<any>(null);
-	let ffmpegLoading = $state(false);
 
 	const SUPPORTED_AUDIO = ['audio/mpeg', 'audio/wav', 'audio/mp3', 'audio/m4a', 'audio/ogg', 'audio/webm'];
 	const SUPPORTED_VIDEO = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo'];
-	const MAX_SIZE = 100 * 1024 * 1024; // 100MB
+	const MAX_AUDIO_SIZE = 100 * 1024 * 1024; // 100MB for audio
+	const MAX_VIDEO_SIZE = 500 * 1024 * 1024; // 500MB for video
 
 	function isVideoFile(file: File): boolean {
 		return SUPPORTED_VIDEO.includes(file.type) || /\.(mp4|webm|mov|avi|mkv)$/i.test(file.name);
@@ -31,105 +29,6 @@
 
 	function isAudioFile(file: File): boolean {
 		return SUPPORTED_AUDIO.includes(file.type) || /\.(mp3|wav|m4a|ogg|webm)$/i.test(file.name);
-	}
-
-	// Load FFmpeg from CDN
-	async function loadFFmpeg() {
-		if (ffmpegRef) return ffmpegRef;
-		if (ffmpegLoading) return null;
-
-		ffmpegLoading = true;
-		try {
-			// Load script
-			await new Promise<void>((resolve, reject) => {
-				if (document.querySelector('script[src*="ffmpeg"]')) {
-					resolve();
-					return;
-				}
-				const script = document.createElement('script');
-				script.src = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js';
-				script.onload = () => resolve();
-				script.onerror = reject;
-				document.head.appendChild(script);
-			});
-
-			const FFmpegWASM = (window as any).FFmpegWASM;
-			if (!FFmpegWASM?.FFmpeg) throw new Error('FFmpeg not loaded');
-
-			const ffmpeg = new FFmpegWASM.FFmpeg();
-
-			// Load core from CDN
-			const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-			const toBlobURL = async (url: string, type: string) => {
-				const res = await fetch(url);
-				const blob = await res.blob();
-				return URL.createObjectURL(new Blob([blob], { type }));
-			};
-
-			await ffmpeg.load({
-				coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-				wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm')
-			});
-
-			ffmpegRef = ffmpeg;
-			return ffmpeg;
-		} catch (err) {
-			console.error('Failed to load FFmpeg:', err);
-			return null;
-		} finally {
-			ffmpegLoading = false;
-		}
-	}
-
-	// Compress video to MP3
-	async function compressVideo(file: File): Promise<File> {
-		dispatch('compressionProgress', { progress: 10 });
-
-		const ffmpeg = await loadFFmpeg();
-		if (!ffmpeg) throw new Error('Failed to load video compressor');
-
-		dispatch('compressionProgress', { progress: 20 });
-
-		const inputName = `input_${Date.now()}.${file.name.split('.').pop()}`;
-		const outputName = `output_${Date.now()}.mp3`;
-
-		// Write input file
-		const arrayBuffer = await file.arrayBuffer();
-		await ffmpeg.writeFile(inputName, new Uint8Array(arrayBuffer));
-
-		dispatch('compressionProgress', { progress: 30 });
-
-		// Track progress
-		ffmpeg.on('progress', ({ progress }: { progress: number }) => {
-			dispatch('compressionProgress', { progress: 30 + progress * 50 });
-		});
-
-		// Compress to MP3
-		await ffmpeg.exec([
-			'-i', inputName,
-			'-vn',
-			'-acodec', 'libmp3lame',
-			'-ab', '128k',
-			'-ar', '44100',
-			'-ac', '2',
-			outputName
-		]);
-
-		dispatch('compressionProgress', { progress: 85 });
-
-		// Read output
-		const data = await ffmpeg.readFile(outputName);
-		const arrayData = data.buffer || data;
-		const blob = new Blob([arrayData], { type: 'audio/mpeg' });
-		const compressedFile = new File([blob], outputName, { type: 'audio/mpeg' });
-
-		// Cleanup
-		await ffmpeg.deleteFile(inputName);
-		await ffmpeg.deleteFile(outputName);
-
-		dispatch('compressionProgress', { progress: 95 });
-
-		return compressedFile;
 	}
 
 	// Upload to Google Drive
@@ -190,8 +89,9 @@
 			return;
 		}
 
-		if (file.size > MAX_SIZE && !isVideoFile(file)) {
-			error = 'File size must be under 100MB';
+		const maxSize = isVideoFile(file) ? MAX_VIDEO_SIZE : MAX_AUDIO_SIZE;
+		if (file.size > maxSize) {
+			error = `File size must be under ${isVideoFile(file) ? '500MB' : '100MB'}`;
 			return;
 		}
 
@@ -200,18 +100,10 @@
 		uploadProgress = 0;
 
 		try {
-			let processedFile = file;
-
-			// Compress video to MP3
-			if (isVideoFile(file)) {
-				uploadStatus = 'compressing';
-				processedFile = await compressVideo(file);
-			}
-
-			// Upload to Drive
+			// Upload directly to Drive (no compression needed - AssemblyAI supports video)
 			uploadStatus = 'uploading';
 			uploadProgress = 10;
-			const fileId = await uploadToDrive(processedFile);
+			const fileId = await uploadToDrive(file);
 			uploadProgress = 50;
 
 			// Make public and get URL
@@ -269,9 +161,7 @@
 		<div class="flex flex-col items-center gap-3">
 			<Loader2 size={48} class="animate-spin" style="color: var(--accent)" />
 			<p class="font-medium">
-				{#if uploadStatus === 'compressing'}
-					Compressing video...
-				{:else if uploadStatus === 'uploading'}
+				{#if uploadStatus === 'uploading'}
 					Uploading to Drive...
 				{:else}
 					Starting transcription...
@@ -280,7 +170,6 @@
 			<div class="progress-bar" style="max-width: 200px">
 				<div
 					class="progress-bar-fill"
-					class:compression={uploadStatus === 'compressing'}
 					style="width: {uploadProgress}%"
 				></div>
 			</div>
@@ -308,7 +197,7 @@
 			</p>
 
 			<p class="text-sm text-muted">
-				Supports MP3, WAV, M4A, MP4, MOV • Videos are auto-compressed
+				Supports MP3, WAV, M4A, MP4, MOV • Max 500MB for video, 100MB for audio
 			</p>
 
 			<button class="btn btn-secondary mt-2" onclick={openDrivePicker}>
