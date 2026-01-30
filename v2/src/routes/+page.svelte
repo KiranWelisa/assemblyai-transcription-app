@@ -17,39 +17,39 @@
 	let searchQuery = $state('');
 	let darkMode = $state(false);
 
-	// SSE connection for realtime updates
+	// Poll for updates (SSE doesn't work well on Cloudflare Workers)
 	$effect(() => {
-		const eventSource = new EventSource('/api/sse');
+		const pollForUpdates = async () => {
+			try {
+				const res = await fetch('/api/transcriptions');
+				if (!res.ok) return;
+				const { transcriptions: updated } = await res.json();
 
-		eventSource.onmessage = (event) => {
-			const message = JSON.parse(event.data);
-
-			if (message.type === 'transcription_completed') {
-				// Update the transcription in the list
-				transcriptions = transcriptions.map((t) =>
-					t.id === message.data.id ? { ...t, ...message.data, status: 'completed' } : t
-				);
-				// Clear active transcription if it matches
-				if (activeTranscription?.fileName === message.data.fileName) {
-					activeTranscription = { ...activeTranscription, status: 'completed' };
-					setTimeout(() => {
-						activeTranscription = null;
-					}, 3000);
+				// Check for completed transcriptions that were processing
+				for (const t of updated) {
+					const existing = transcriptions.find((e) => e.id === t.id);
+					if (existing?.status === 'processing' && t.status === 'completed') {
+						// Clear active transcription if it matches
+						if (activeTranscription?.fileName === t.fileName) {
+							activeTranscription = { ...activeTranscription, status: 'completed' };
+							setTimeout(() => {
+								activeTranscription = null;
+							}, 3000);
+						}
+					}
 				}
-			}
 
-			if (message.type === 'title_generated') {
-				transcriptions = transcriptions.map((t) =>
-					t.id === message.data.id ? { ...t, title: message.data.title } : t
-				);
+				// Update transcriptions list
+				transcriptions = updated;
+			} catch {
+				// Ignore polling errors
 			}
 		};
 
-		eventSource.onerror = () => {
-			console.log('SSE connection error, will retry...');
-		};
+		// Poll every 5 seconds
+		const interval = setInterval(pollForUpdates, 5000);
 
-		return () => eventSource.close();
+		return () => clearInterval(interval);
 	});
 
 	// Toggle dark mode
