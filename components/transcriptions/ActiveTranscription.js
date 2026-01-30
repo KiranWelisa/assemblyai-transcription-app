@@ -1,12 +1,13 @@
 // components/transcriptions/ActiveTranscription.js
 import React, { useState, useEffect } from 'react';
-import { Loader2, FileAudio, Clock, CheckCircle2 } from 'lucide-react';
+import { Loader2, FileAudio, Clock, CheckCircle2, Zap } from 'lucide-react';
 
 export default function ActiveTranscription({
   status, // 'publishing' | 'transcribing' | 'polling' | 'completed' | 'error'
   fileName,
   pollCount = 0,
-  startTime
+  startTime,
+  compressionStatus = { active: false, progress: 0 } // { active: boolean, progress: number }
 }) {
   const [elapsedTime, setElapsedTime] = useState(0);
 
@@ -61,6 +62,14 @@ export default function ActiveTranscription({
   };
 
   const getStatusMessage = () => {
+    // Show compression status first
+    if (compressionStatus.active) {
+      if (compressionStatus.progress < 20) return 'Loading video compressor...';
+      if (compressionStatus.progress < 30) return 'Downloading video from Drive...';
+      if (compressionStatus.progress < 80) return `Compressing to MP3... ${Math.round((compressionStatus.progress - 20) / 60 * 100)}%`;
+      return 'Uploading compressed file...';
+    }
+
     switch (status) {
       case 'publishing':
         return 'Preparing file...';
@@ -77,10 +86,20 @@ export default function ActiveTranscription({
     }
   };
 
-  const progressPercent = getProgressPercent();
-  const isActive = status && status !== 'idle' && status !== 'completed' && status !== 'error';
+  const getOverallProgressPercent = () => {
+    // When compressing, show compression progress in first 15%
+    if (compressionStatus.active) {
+      return Math.round(compressionStatus.progress * 0.15);
+    }
+    // Normal transcription progress starts at 15%
+    return 15 + (getProgressPercent() * 0.85);
+  };
 
-  if (!isActive && status !== 'completed') {
+  const progressPercent = compressionStatus.active ? compressionStatus.progress : getProgressPercent();
+  const isActive = status && status !== 'idle' && status !== 'completed' && status !== 'error';
+  const isCompressing = compressionStatus.active;
+
+  if (!isActive && status !== 'completed' && !isCompressing) {
     return null;
   }
 
@@ -91,6 +110,10 @@ export default function ActiveTranscription({
           <div className="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
             <CheckCircle2 className="w-5 h-5 text-green-500" />
           </div>
+        ) : isCompressing ? (
+          <div className="w-10 h-10 rounded-full bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
+            <Zap className="w-5 h-5 text-purple-500 animate-pulse" />
+          </div>
         ) : (
           <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
             <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
@@ -98,7 +121,11 @@ export default function ActiveTranscription({
         )}
         <div className="flex-1 min-w-0">
           <h3 className="font-semibold text-gray-900 dark:text-white">
-            {status === 'completed' ? 'Transcription Complete' : 'Transcription in Progress'}
+            {status === 'completed'
+              ? 'Transcription Complete'
+              : isCompressing
+                ? 'Compressing Video'
+                : 'Transcription in Progress'}
           </h3>
           {fileName && (
             <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
@@ -119,7 +146,9 @@ export default function ActiveTranscription({
             className={`h-full transition-all duration-500 ${
               status === 'completed'
                 ? 'bg-green-500'
-                : 'bg-gradient-to-r from-blue-500 to-indigo-600'
+                : isCompressing
+                  ? 'bg-gradient-to-r from-purple-500 to-pink-500'
+                  : 'bg-gradient-to-r from-blue-500 to-indigo-600'
             }`}
             style={{ width: `${progressPercent}%` }}
           />

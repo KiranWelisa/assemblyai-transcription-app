@@ -57,28 +57,68 @@ export default function DropZone({
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   };
 
-  // Load FFmpeg on demand
+  // Helper to load script from CDN
+  const loadScript = (src) => {
+    return new Promise((resolve, reject) => {
+      // Check if already loaded
+      if (document.querySelector(`script[src="${src}"]`)) {
+        resolve();
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = src;
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+  };
+
+  // Helper to convert URL to blob URL with proper CORS handling
+  const toBlobURL = async (url, mimeType) => {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    return URL.createObjectURL(new Blob([blob], { type: mimeType }));
+  };
+
+  // Helper to convert file to Uint8Array
+  const fetchFileData = async (file) => {
+    const arrayBuffer = await file.arrayBuffer();
+    return new Uint8Array(arrayBuffer);
+  };
+
+  // Load FFmpeg on demand - using CDN to avoid bundling issues
   const loadFFmpeg = async () => {
     if (ffmpegRef.current) return ffmpegRef.current;
     if (ffmpegLoading) return null;
 
     setFfmpegLoading(true);
     try {
-      const { FFmpeg } = await import('@ffmpeg/ffmpeg');
-      const { fetchFile, toBlobURL } = await import('@ffmpeg/util');
+      // Load FFmpeg from CDN using UMD build to avoid bundling issues
+      await loadScript('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js');
 
-      const ffmpeg = new FFmpeg();
+      // Access FFmpeg from global scope
+      const FFmpegWASM = window.FFmpegWASM;
+      if (!FFmpegWASM || !FFmpegWASM.FFmpeg) {
+        throw new Error('FFmpeg not loaded from CDN');
+      }
 
-      // Load FFmpeg core from CDN
-      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+      const ffmpeg = new FFmpegWASM.FFmpeg();
+
+      // Set up logging
+      ffmpeg.on('log', ({ message }) => {
+        console.log('[FFmpeg]', message);
+      });
+
+      // Load FFmpeg core from CDN with proper CORS headers
+      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
       await ffmpeg.load({
         coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
         wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
       });
 
-      ffmpegRef.current = { ffmpeg, fetchFile };
+      ffmpegRef.current = { ffmpeg, fetchFile: fetchFileData };
       setFfmpegLoaded(true);
-      return { ffmpeg, fetchFile };
+      return { ffmpeg, fetchFile: fetchFileData };
     } catch (error) {
       console.error('Failed to load FFmpeg:', error);
       return null;
@@ -131,7 +171,9 @@ export default function DropZone({
 
       // Read output file
       const data = await ffmpeg.readFile(outputName);
-      const compressedBlob = new Blob([data.buffer], { type: 'audio/mpeg' });
+      // Handle both ArrayBuffer and Uint8Array responses
+      const arrayBuffer = data.buffer || data;
+      const compressedBlob = new Blob([arrayBuffer], { type: 'audio/mpeg' });
       const compressedFile = new File([compressedBlob], outputName, { type: 'audio/mpeg' });
 
       // Cleanup

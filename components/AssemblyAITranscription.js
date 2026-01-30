@@ -42,8 +42,11 @@ const AssemblyAITranscription = () => {
   const [transcriptionStartTime, setTranscriptionStartTime] = useState(null);
   const [pollCount, setPollCount] = useState(0);
   const [activeFileName, setActiveFileName] = useState('');
+  const [compressionStatus, setCompressionStatus] = useState({ active: false, progress: 0 });
 
   const pickerLoadedRef = useRef(false);
+  const ffmpegRef = useRef(null);
+  const ffmpegLoadingRef = useRef(false);
   const oneTapRef = useRef(false);
   const titlePollingRef = useRef(null);
   const backgroundPollingRef = useRef(null);
@@ -490,6 +493,159 @@ const AssemblyAITranscription = () => {
     };
   }, []);
 
+  // Video types that need compression
+  const VIDEO_MIMETYPES = ['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime', 'video/x-msvideo', 'video/x-ms-wmv', 'video/x-flv', 'video/x-matroska'];
+
+  const isVideoFile = (mimeType, fileName) => {
+    if (VIDEO_MIMETYPES.includes(mimeType)) return true;
+    const ext = fileName?.split('.').pop()?.toLowerCase();
+    return ['mp4', 'mkv', 'mov', 'avi', 'wmv', 'flv', 'webm'].includes(ext);
+  };
+
+  // Load FFmpeg from CDN (avoids Next.js bundling issues)
+  const loadFFmpeg = async () => {
+    if (ffmpegRef.current) return ffmpegRef.current;
+    if (ffmpegLoadingRef.current) {
+      // Wait for existing load
+      while (ffmpegLoadingRef.current) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return ffmpegRef.current;
+    }
+
+    ffmpegLoadingRef.current = true;
+    try {
+      // Load FFmpeg UMD from CDN
+      if (!document.querySelector('script[src*="ffmpeg.js"]')) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js';
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+
+      const FFmpegWASM = window.FFmpegWASM;
+      if (!FFmpegWASM?.FFmpeg) throw new Error('FFmpeg not loaded');
+
+      const ffmpeg = new FFmpegWASM.FFmpeg();
+      ffmpeg.on('log', ({ message }) => console.log('[FFmpeg]', message));
+
+      // Load WASM core
+      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+      const toBlobURL = async (url, type) => {
+        const res = await fetch(url);
+        const blob = await res.blob();
+        return URL.createObjectURL(new Blob([blob], { type }));
+      };
+
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+      });
+
+      ffmpegRef.current = ffmpeg;
+      return ffmpeg;
+    } finally {
+      ffmpegLoadingRef.current = false;
+    }
+  };
+
+  // Download file from Google Drive
+  const downloadFromDrive = async (fileId) => {
+    if (!session?.accessToken) throw new Error('Not authenticated');
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: { 'Authorization': `Bearer ${session.accessToken}` }
+    });
+    if (!response.ok) throw new Error('Failed to download file from Drive');
+    return await response.arrayBuffer();
+  };
+
+  // Upload file to Google Drive (resumable)
+  const uploadToDrive = async (fileData, fileName, mimeType) => {
+    if (!session?.accessToken) throw new Error('Not authenticated');
+
+    // Initialize upload
+    const initRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name: fileName, mimeType }),
+    });
+
+    if (!initRes.ok) throw new Error('Failed to initialize upload');
+    const uploadUrl = initRes.headers.get('Location');
+
+    // Upload file
+    const uploadRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': mimeType },
+      body: fileData,
+    });
+
+    if (!uploadRes.ok) throw new Error('Failed to upload file');
+    return await uploadRes.json();
+  };
+
+  // Compress video to MP3
+  const compressVideoToMp3 = async (fileId, fileName) => {
+    setCompressionStatus({ active: true, progress: 0 });
+
+    try {
+      // 1. Load FFmpeg
+      setStatusMessage('Loading video compressor...');
+      const ffmpeg = await loadFFmpeg();
+      if (!ffmpeg) throw new Error('Failed to load FFmpeg');
+
+      // 2. Download video from Drive
+      setStatusMessage('Downloading video from Drive...');
+      setCompressionStatus({ active: true, progress: 10 });
+      const videoData = await downloadFromDrive(fileId);
+
+      // 3. Write to FFmpeg filesystem
+      setCompressionStatus({ active: true, progress: 20 });
+      const inputName = 'input' + fileName.substring(fileName.lastIndexOf('.'));
+      await ffmpeg.writeFile(inputName, new Uint8Array(videoData));
+
+      // 4. Set up progress tracking
+      ffmpeg.on('progress', ({ progress }) => {
+        const overallProgress = 20 + Math.round(progress * 60); // 20-80%
+        setCompressionStatus({ active: true, progress: overallProgress });
+        setStatusMessage(`Compressing to MP3... ${Math.round(progress * 100)}%`);
+      });
+
+      // 5. Convert to MP3 128kbps
+      const outputName = fileName.replace(/\.[^/.]+$/, '') + '.mp3';
+      await ffmpeg.exec([
+        '-i', inputName,
+        '-vn', '-acodec', 'libmp3lame',
+        '-ab', '128k', '-ar', '44100', '-ac', '2',
+        outputName
+      ]);
+
+      // 6. Read output
+      setCompressionStatus({ active: true, progress: 85 });
+      setStatusMessage('Uploading compressed file...');
+      const data = await ffmpeg.readFile(outputName);
+      const mp3Data = new Blob([data.buffer || data], { type: 'audio/mpeg' });
+
+      // 7. Upload compressed MP3 to Drive
+      const uploadedFile = await uploadToDrive(mp3Data, outputName, 'audio/mpeg');
+
+      // 8. Cleanup
+      await ffmpeg.deleteFile(inputName);
+      await ffmpeg.deleteFile(outputName);
+
+      setCompressionStatus({ active: true, progress: 100 });
+      return { id: uploadedFile.id, name: outputName, mimeType: 'audio/mpeg' };
+    } finally {
+      setCompressionStatus({ active: false, progress: 0 });
+    }
+  };
+
   const pollTranscriptionStatus = async (transcriptId) => {
     if (!apiKey) return;
     setPollCount(0);
@@ -518,11 +674,27 @@ const AssemblyAITranscription = () => {
     let finalAudioUrl = audioUrl;
     let localDriveFile = driveFile;
     let localPermissionId = null;
+    let compressedFileId = null; // Track compressed file for cleanup
     const fileName = driveFile ? driveFile.name : audioUrl.split('/').pop();
     setActiveFileName(fileName);
 
     try {
       if (localDriveFile) {
+        // Check if this is a video file that needs compression
+        if (isVideoFile(localDriveFile.mimeType, localDriveFile.name)) {
+          setTranscriptionStatus('publishing');
+          setStatusMessage('Video detected - compressing to MP3...');
+          try {
+            const compressedFile = await compressVideoToMp3(localDriveFile.id, localDriveFile.name);
+            localDriveFile = compressedFile;
+            compressedFileId = compressedFile.id; // Store for cleanup
+            setActiveFileName(compressedFile.name);
+          } catch (compressError) {
+            console.error('Compression failed:', compressError);
+            throw new Error(`Failed to compress video: ${compressError.message}`);
+          }
+        }
+
         setTranscriptionStatus('publishing');
         setStatusMessage('Preparing file...');
         const response = await fetch('/api/drive/make-public', {
@@ -609,6 +781,18 @@ const AssemblyAITranscription = () => {
           });
         } catch (revokeError) {
           console.error('CRITICAL: Failed to revoke file permission:', revokeError);
+        }
+      }
+      // Delete compressed temporary file from Drive
+      if (compressedFileId && session?.accessToken) {
+        try {
+          await fetch(`https://www.googleapis.com/drive/v3/files/${compressedFileId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${session.accessToken}` },
+          });
+          console.log('Cleaned up compressed temporary file');
+        } catch (deleteError) {
+          console.error('Failed to delete compressed file:', deleteError);
         }
       }
       setDriveFile(null);
@@ -867,7 +1051,7 @@ const AssemblyAITranscription = () => {
         {/* Top Section: Upload + Recently Added/Active Transcription side by side */}
         {(() => {
           const hasNewItems = pastTranscriptions.some(t => t.isNew && t.duration !== null);
-          const hasActiveTranscription = transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error';
+          const hasActiveTranscription = (transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error') || compressionStatus.active;
           const showRightColumn = hasNewItems || hasActiveTranscription;
           return (
         <div className={`grid gap-6 mb-8 ${showRightColumn ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'}`}>
@@ -944,14 +1128,15 @@ const AssemblyAITranscription = () => {
           {/* Right column: Active Transcription and/or Recently Added */}
           <div className="space-y-4">
             {/* Active Transcription Progress */}
-            {transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error' && (
+            {(transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error') || compressionStatus.active ? (
               <ActiveTranscription
                 status={transcriptionStatus}
                 fileName={activeFileName}
                 pollCount={pollCount}
                 startTime={transcriptionStartTime}
+                compressionStatus={compressionStatus}
               />
-            )}
+            ) : null}
 
             {/* Recently Added Section */}
             <RecentlyAdded
