@@ -20,8 +20,6 @@
 
 	const SUPPORTED_AUDIO = ['audio/mpeg', 'audio/wav', 'audio/mp3', 'audio/m4a', 'audio/ogg', 'audio/webm'];
 	const SUPPORTED_VIDEO = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo'];
-	const MAX_AUDIO_SIZE = 100 * 1024 * 1024; // 100MB for audio
-	const MAX_VIDEO_SIZE = 500 * 1024 * 1024; // 500MB for video
 
 	function isVideoFile(file: File): boolean {
 		return SUPPORTED_VIDEO.includes(file.type) || /\.(mp4|webm|mov|avi|mkv)$/i.test(file.name);
@@ -86,12 +84,6 @@
 	async function handleFile(file: File) {
 		if (!isAudioFile(file) && !isVideoFile(file)) {
 			error = 'Please upload an audio or video file';
-			return;
-		}
-
-		const maxSize = isVideoFile(file) ? MAX_VIDEO_SIZE : MAX_AUDIO_SIZE;
-		if (file.size > maxSize) {
-			error = `File size must be under ${isVideoFile(file) ? '500MB' : '100MB'}`;
 			return;
 		}
 
@@ -197,7 +189,7 @@
 			</p>
 
 			<p class="text-sm text-muted">
-				Supports MP3, WAV, M4A, MP4, MOV • Max 500MB for video, 100MB for audio
+				Supports MP3, WAV, M4A, MP4, MOV and more
 			</p>
 
 			<button class="btn btn-secondary mt-2" onclick={openDrivePicker}>
