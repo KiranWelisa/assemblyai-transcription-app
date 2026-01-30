@@ -3,7 +3,10 @@ import type { RequestHandler } from './$types';
 import { createDb } from '$lib/db';
 
 // Store active connections (in-memory - works per edge instance)
-const connections = new Map<string, ReadableStreamDefaultController>();
+const connections = new Map<string, ReadableStreamDefaultController<Uint8Array>>();
+
+// TextEncoder for converting strings to bytes (required by Cloudflare Workers)
+const encoder = new TextEncoder();
 
 export const GET: RequestHandler = async ({ locals, platform }) => {
 	if (!locals.user) {
@@ -13,14 +16,14 @@ export const GET: RequestHandler = async ({ locals, platform }) => {
 	const userEmail = locals.user.email;
 	const connectionId = crypto.randomUUID();
 
-	const stream = new ReadableStream({
+	const stream = new ReadableStream<Uint8Array>({
 		start(controller) {
 			// Store connection
 			connections.set(connectionId, controller);
 
 			// Send initial connection message
 			const data = JSON.stringify({ type: 'connected', connectionId });
-			controller.enqueue(`data: ${data}\n\n`);
+			controller.enqueue(encoder.encode(`data: ${data}\n\n`));
 
 			// Set up polling for updates (since we can't use global state in edge workers)
 			const checkForUpdates = async () => {
@@ -47,7 +50,7 @@ export const GET: RequestHandler = async ({ locals, platform }) => {
 								fileName: t.fileName
 							}
 						});
-						controller.enqueue(`data: ${message}\n\n`);
+						controller.enqueue(encoder.encode(`data: ${message}\n\n`));
 					}
 				} catch (err) {
 					console.error('SSE polling error:', err);
@@ -85,7 +88,7 @@ export function _broadcastToUser(userEmail: string, message: object) {
 	const data = JSON.stringify(message);
 	connections.forEach((controller) => {
 		try {
-			controller.enqueue(`data: ${data}\n\n`);
+			controller.enqueue(encoder.encode(`data: ${data}\n\n`));
 		} catch {
 			// Connection closed
 		}
