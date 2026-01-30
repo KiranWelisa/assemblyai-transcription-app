@@ -5,6 +5,7 @@ import { useSession, signIn, signOut } from 'next-auth/react';
 import DropZone from './upload/DropZone';
 import TranscriptionCard from './transcriptions/TranscriptionCard';
 import RecentlyAdded from './transcriptions/RecentlyAdded';
+import ActiveTranscription from './transcriptions/ActiveTranscription';
 import NewBadge from './transcriptions/NewBadge';
 
 const AssemblyAITranscription = () => {
@@ -38,7 +39,10 @@ const AssemblyAITranscription = () => {
   const [syncProgress, setSyncProgress] = useState({ synced: 0, total: 0 });
   const [copied, setCopied] = useState(false);
   const [processingTitles, setProcessingTitles] = useState(false);
-  
+  const [transcriptionStartTime, setTranscriptionStartTime] = useState(null);
+  const [pollCount, setPollCount] = useState(0);
+  const [activeFileName, setActiveFileName] = useState('');
+
   const pickerLoadedRef = useRef(false);
   const oneTapRef = useRef(false);
   const titlePollingRef = useRef(null);
@@ -488,8 +492,10 @@ const AssemblyAITranscription = () => {
 
   const pollTranscriptionStatus = async (transcriptId) => {
     if (!apiKey) return;
+    setPollCount(0);
     for (let i = 0; i < 200; i++) {
-      setStatusMessage(`Polling for status... Attempt ${i + 1}`);
+      setPollCount(i + 1);
+      setStatusMessage(`Transcribing... ${i + 1}`);
       const response = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
         headers: { 'Authorization': apiKey }
       });
@@ -507,15 +513,18 @@ const AssemblyAITranscription = () => {
     setError(null);
     setCurrentTranscript(null);
     setCurrentTranscriptionId(null);
+    setTranscriptionStartTime(Date.now());
+    setPollCount(0);
     let finalAudioUrl = audioUrl;
     let localDriveFile = driveFile;
     let localPermissionId = null;
     const fileName = driveFile ? driveFile.name : audioUrl.split('/').pop();
+    setActiveFileName(fileName);
 
     try {
       if (localDriveFile) {
         setTranscriptionStatus('publishing');
-        setStatusMessage('Preparing file from Google Drive...');
+        setStatusMessage('Preparing file...');
         const response = await fetch('/api/drive/make-public', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -855,10 +864,15 @@ const AssemblyAITranscription = () => {
 
       {/* Main Content */}
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Top Section: Upload + Recently Added side by side */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {/* Top Section: Upload + Recently Added/Active Transcription side by side */}
+        {(() => {
+          const hasNewItems = pastTranscriptions.some(t => t.isNew && t.duration !== null);
+          const hasActiveTranscription = transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error';
+          const showRightColumn = hasNewItems || hasActiveTranscription;
+          return (
+        <div className={`grid gap-6 mb-8 ${showRightColumn ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'}`}>
           {/* New Transcription Section with DropZone */}
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
+          <div className={`bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 ${!showRightColumn ? 'max-w-3xl mx-auto w-full' : ''}`}>
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
               <Upload className="w-5 h-5" />
               New Transcription
@@ -887,7 +901,7 @@ const AssemblyAITranscription = () => {
               <div className="flex-grow border-t border-gray-300 dark:border-gray-600"></div>
             </div>
 
-            {/* Alternative options */}
+            {/* Selected file or Drive picker */}
             <div className="space-y-3">
               {driveFile ? (
                 <div className="flex items-center justify-between p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl">
@@ -900,34 +914,22 @@ const AssemblyAITranscription = () => {
                   </button>
                 </div>
               ) : (
-                <>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={audioUrl}
-                      onChange={(e) => setAudioUrl(e.target.value)}
-                      placeholder="Paste a public media URL..."
-                      className="flex-1 p-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                    />
-                  </div>
-
-                  <button
-                    onClick={handleChooseFromDrive}
-                    className="w-full bg-white dark:bg-gray-700 border-2 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 py-2.5 px-4 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-all flex items-center justify-center gap-2 font-medium text-sm"
-                  >
-                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none"><path d="M7.75 22.5L1.5 12L7.75 1.5H20.5L24 7.5L17.75 18L13.75 11.25L7.75 22.5Z" fill="#2684FC"></path><path d="M1.5 12L4.625 17.25L10.875 6.75L7.75 1.5L1.5 12Z" fill="#00A85D"></path><path d="M20.5 1.5L13.75 11.25L17.75 18L24 7.5L20.5 1.5Z" fill="#FFC107"></path></svg>
-                    Choose from Google Drive
-                  </button>
-                </>
+                <button
+                  onClick={handleChooseFromDrive}
+                  className="w-full bg-white dark:bg-gray-700 border-2 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 py-2.5 px-4 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-all flex items-center justify-center gap-2 font-medium text-sm"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none"><path d="M7.75 22.5L1.5 12L7.75 1.5H20.5L24 7.5L17.75 18L13.75 11.25L7.75 22.5Z" fill="#2684FC"></path><path d="M1.5 12L4.625 17.25L10.875 6.75L7.75 1.5L1.5 12Z" fill="#00A85D"></path><path d="M20.5 1.5L13.75 11.25L17.75 18L24 7.5L20.5 1.5Z" fill="#FFC107"></path></svg>
+                  Or choose from Google Drive
+                </button>
               )}
             </div>
 
             {error && <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-400 text-sm">{error}</div>}
 
-            {(audioUrl || driveFile) && (
+            {driveFile && (
               <button
                 onClick={startTranscription}
-                disabled={isTranscriptionDisabled}
+                disabled={!driveFile || !['idle', 'completed', 'error'].includes(transcriptionStatus)}
                 className="mt-4 w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 px-6 rounded-xl hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-500 flex items-center justify-center gap-2 transition-all font-medium shadow-lg disabled:shadow-none"
               >
                 {transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error' ?
@@ -939,14 +941,40 @@ const AssemblyAITranscription = () => {
             )}
           </div>
 
-          {/* Recently Added Section */}
-          <RecentlyAdded
-            transcriptions={pastTranscriptions}
-            onSelect={loadTranscript}
-            formatDate={formatDate}
-            maxItems={5}
-          />
+          {/* Right column: Active Transcription and/or Recently Added */}
+          <div className="space-y-4">
+            {/* Active Transcription Progress */}
+            {transcriptionStatus !== 'idle' && transcriptionStatus !== 'completed' && transcriptionStatus !== 'error' && (
+              <ActiveTranscription
+                status={transcriptionStatus}
+                fileName={activeFileName}
+                pollCount={pollCount}
+                startTime={transcriptionStartTime}
+              />
+            )}
+
+            {/* Recently Added Section */}
+            <RecentlyAdded
+              transcriptions={pastTranscriptions}
+              onSelect={loadTranscript}
+              onClearAll={async () => {
+                try {
+                  await fetch('/api/transcriptions/mark-all-viewed', { method: 'POST' });
+                  // Update local state
+                  setPastTranscriptions(prev =>
+                    prev.map(t => t.isNew ? { ...t, isNew: false, viewedAt: new Date().toISOString() } : t)
+                  );
+                } catch (err) {
+                  console.error('Failed to clear all:', err);
+                }
+              }}
+              formatDate={formatDate}
+              maxItems={5}
+            />
+          </div>
         </div>
+          );
+        })()}
 
         {/* Section Header with Search & Filter */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">

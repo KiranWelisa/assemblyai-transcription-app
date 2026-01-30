@@ -1,10 +1,15 @@
 // components/upload/DropZone.js
-import React, { useState, useRef, useCallback } from 'react';
-import { Upload, File, X, Loader2, Cloud, CheckCircle2 } from 'lucide-react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { Upload, File, X, Loader2, Cloud, CheckCircle2, Music, Zap } from 'lucide-react';
 
 const ALLOWED_TYPES = [
   'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/ogg',
   'audio/webm', 'audio/aac', 'audio/flac', 'audio/x-m4a', 'audio/mp4',
+  'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime',
+  'video/x-msvideo', 'video/x-ms-wmv', 'video/x-flv', 'video/x-matroska'
+];
+
+const VIDEO_TYPES = [
   'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime',
   'video/x-msvideo', 'video/x-ms-wmv', 'video/x-flv', 'video/x-matroska'
 ];
@@ -14,7 +19,10 @@ const ALLOWED_EXTENSIONS = [
   '.mp4', '.mkv', '.mov', '.avi', '.wmv', '.flv'
 ];
 
+const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.mov', '.avi', '.wmv', '.flv', '.webm'];
+
 const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB
+const COMPRESSION_THRESHOLD = 10 * 1024 * 1024; // 10MB - compress videos larger than this
 
 export default function DropZone({
   onFileSelect,
@@ -24,13 +32,119 @@ export default function DropZone({
 }) {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadState, setUploadState] = useState({
-    status: 'idle', // idle, uploading, success, error
+    status: 'idle', // idle, compressing, uploading, success, error
     progress: 0,
     fileName: '',
-    error: null
+    error: null,
+    compressionInfo: null // { originalSize, compressedSize }
   });
+  const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
+  const [ffmpegLoading, setFfmpegLoading] = useState(false);
+  const ffmpegRef = useRef(null);
   const fileInputRef = useRef(null);
   const dragCounterRef = useRef(0);
+
+  // Check if file is a video
+  const isVideoFile = (file) => {
+    const extension = '.' + file.name.split('.').pop().toLowerCase();
+    return VIDEO_TYPES.includes(file.type) || VIDEO_EXTENSIONS.includes(extension);
+  };
+
+  // Load FFmpeg on demand
+  const loadFFmpeg = async () => {
+    if (ffmpegRef.current) return ffmpegRef.current;
+    if (ffmpegLoading) return null;
+
+    setFfmpegLoading(true);
+    try {
+      const { FFmpeg } = await import('@ffmpeg/ffmpeg');
+      const { fetchFile, toBlobURL } = await import('@ffmpeg/util');
+
+      const ffmpeg = new FFmpeg();
+
+      // Load FFmpeg core from CDN
+      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+      });
+
+      ffmpegRef.current = { ffmpeg, fetchFile };
+      setFfmpegLoaded(true);
+      return { ffmpeg, fetchFile };
+    } catch (error) {
+      console.error('Failed to load FFmpeg:', error);
+      return null;
+    } finally {
+      setFfmpegLoading(false);
+    }
+  };
+
+  // Compress video to MP3
+  const compressToMp3 = async (file) => {
+    setUploadState(prev => ({
+      ...prev,
+      status: 'compressing',
+      progress: 0,
+      fileName: file.name,
+      compressionInfo: { originalSize: file.size, compressedSize: null }
+    }));
+
+    try {
+      const ffmpegInstance = await loadFFmpeg();
+      if (!ffmpegInstance) {
+        throw new Error('Failed to load FFmpeg');
+      }
+
+      const { ffmpeg, fetchFile } = ffmpegInstance;
+
+      // Set progress handler
+      ffmpeg.on('progress', ({ progress }) => {
+        setUploadState(prev => ({
+          ...prev,
+          progress: Math.round(progress * 100)
+        }));
+      });
+
+      // Write input file
+      const inputName = 'input' + file.name.substring(file.name.lastIndexOf('.'));
+      await ffmpeg.writeFile(inputName, await fetchFile(file));
+
+      // Convert to MP3 128kbps
+      const outputName = file.name.replace(/\.[^/.]+$/, '') + '.mp3';
+      await ffmpeg.exec([
+        '-i', inputName,
+        '-vn',              // No video
+        '-acodec', 'libmp3lame',
+        '-ab', '128k',      // 128kbps bitrate
+        '-ar', '44100',     // 44.1kHz sample rate
+        '-ac', '2',         // Stereo
+        outputName
+      ]);
+
+      // Read output file
+      const data = await ffmpeg.readFile(outputName);
+      const compressedBlob = new Blob([data.buffer], { type: 'audio/mpeg' });
+      const compressedFile = new File([compressedBlob], outputName, { type: 'audio/mpeg' });
+
+      // Cleanup
+      await ffmpeg.deleteFile(inputName);
+      await ffmpeg.deleteFile(outputName);
+
+      setUploadState(prev => ({
+        ...prev,
+        compressionInfo: {
+          originalSize: file.size,
+          compressedSize: compressedFile.size
+        }
+      }));
+
+      return compressedFile;
+    } catch (error) {
+      console.error('Compression error:', error);
+      throw new Error('Failed to compress video: ' + error.message);
+    }
+  };
 
   const validateFile = (file) => {
     if (!file) return { valid: false, error: 'No file selected' };
@@ -166,14 +280,27 @@ export default function DropZone({
         status: 'error',
         progress: 0,
         fileName: file?.name || '',
-        error: validation.error
+        error: validation.error,
+        compressionInfo: null
       });
       return;
     }
 
     try {
+      let fileToUpload = file;
+
+      // Compress video files larger than threshold to MP3
+      if (isVideoFile(file) && file.size > COMPRESSION_THRESHOLD) {
+        try {
+          fileToUpload = await compressToMp3(file);
+        } catch (compressError) {
+          console.warn('Compression failed, uploading original:', compressError);
+          // Continue with original file if compression fails
+        }
+      }
+
       // Upload to Google Drive
-      const driveFile = await uploadToGoogleDrive(file);
+      const driveFile = await uploadToGoogleDrive(fileToUpload);
 
       // Notify parent component
       if (onFileSelect) {
@@ -245,10 +372,18 @@ export default function DropZone({
       status: 'idle',
       progress: 0,
       fileName: '',
-      error: null
+      error: null,
+      compressionInfo: null
     });
   };
 
+  const formatFileSize = (bytes) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  const isCompressing = uploadState.status === 'compressing';
   const isUploading = uploadState.status === 'uploading';
   const isSuccess = uploadState.status === 'success';
   const isError = uploadState.status === 'error';
@@ -305,6 +440,35 @@ export default function DropZone({
           </div>
         )}
 
+        {/* Compressing State */}
+        {isCompressing && (
+          <div className="text-center">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
+              <Zap className="w-8 h-8 text-purple-500 animate-pulse" />
+            </div>
+            <p className="text-lg font-medium text-gray-700 dark:text-gray-200 mb-2">
+              Compressing to MP3...
+            </p>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1 truncate max-w-xs mx-auto">
+              {uploadState.fileName}
+            </p>
+            {uploadState.compressionInfo?.originalSize && (
+              <p className="text-xs text-purple-600 dark:text-purple-400 mb-4">
+                {formatFileSize(uploadState.compressionInfo.originalSize)} → MP3 128kbps
+              </p>
+            )}
+            <div className="w-full max-w-xs mx-auto bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-gradient-to-r from-purple-500 to-pink-500 h-full transition-all duration-300"
+                style={{ width: `${uploadState.progress}%` }}
+              />
+            </div>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+              {uploadState.progress}%
+            </p>
+          </div>
+        )}
+
         {/* Uploading State */}
         {isUploading && (
           <div className="text-center">
@@ -314,9 +478,15 @@ export default function DropZone({
             <p className="text-lg font-medium text-gray-700 dark:text-gray-200 mb-2">
               Uploading to Google Drive...
             </p>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4 truncate max-w-xs mx-auto">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1 truncate max-w-xs mx-auto">
               {uploadState.fileName}
             </p>
+            {uploadState.compressionInfo?.compressedSize && (
+              <p className="text-xs text-green-600 dark:text-green-400 mb-4">
+                Compressed: {formatFileSize(uploadState.compressionInfo.originalSize)} → {formatFileSize(uploadState.compressionInfo.compressedSize)}
+                ({Math.round((1 - uploadState.compressionInfo.compressedSize / uploadState.compressionInfo.originalSize) * 100)}% smaller)
+              </p>
+            )}
             <div className="w-full max-w-xs mx-auto bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
               <div
                 className="bg-gradient-to-r from-blue-500 to-indigo-600 h-full transition-all duration-300"

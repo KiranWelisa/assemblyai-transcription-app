@@ -1,14 +1,17 @@
 // components/transcriptions/RecentlyAdded.js
-import React from 'react';
-import { Clock, Sparkles } from 'lucide-react';
+import React, { useState } from 'react';
+import { Clock, Sparkles, CheckCheck, Loader2 } from 'lucide-react';
 import NewBadge from './NewBadge';
 
 export default function RecentlyAdded({
   transcriptions,
   onSelect,
+  onClearAll,
   formatDate,
   maxItems = 5
 }) {
+  const [clearing, setClearing] = useState(false);
+
   // Filter for new transcriptions, sorted by most recent
   const recentNew = transcriptions
     .filter(t => t.isNew && t.duration !== null)
@@ -18,15 +21,40 @@ export default function RecentlyAdded({
     return null;
   }
 
+  const handleClearAll = async () => {
+    if (clearing) return;
+    setClearing(true);
+    try {
+      await onClearAll?.();
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
-      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-        <Clock className="w-5 h-5 text-emerald-500" />
-        Recently Added
-        <span className="ml-auto text-sm font-normal text-gray-500 dark:text-gray-400">
-          {recentNew.length} new
-        </span>
-      </h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+          <Clock className="w-5 h-5 text-emerald-500" />
+          Recently Added
+          <span className="text-sm font-normal text-gray-500 dark:text-gray-400">
+            {recentNew.length} new
+          </span>
+        </h3>
+        <button
+          onClick={handleClearAll}
+          disabled={clearing}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-colors disabled:opacity-50"
+          title="Mark all as read"
+        >
+          {clearing ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <CheckCheck className="w-3.5 h-3.5" />
+          )}
+          Clear all
+        </button>
+      </div>
 
       <div className="space-y-3">
         {recentNew.map((transcription) => (
