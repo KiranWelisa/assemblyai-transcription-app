@@ -1,14 +1,13 @@
 <script lang="ts">
-	import { Loader2, CheckCircle, Zap, Clock } from 'lucide-svelte';
+	import { Loader2, CheckCircle, Clock } from 'lucide-svelte';
 
 	interface Props {
 		status: string;
 		fileName: string;
 		startTime: number;
-		compressionProgress?: number;
 	}
 
-	let { status, fileName, startTime, compressionProgress = 0 }: Props = $props();
+	let { status, fileName, startTime }: Props = $props();
 
 	let elapsedTime = $state(0);
 
@@ -29,16 +28,10 @@
 		return `${mins}m ${secs}s`;
 	}
 
-	const isCompressing = $derived(status === 'compressing');
 	const isCompleted = $derived(status === 'completed');
-	const progress = $derived(isCompressing ? compressionProgress : status === 'completed' ? 100 : 50);
+	const progress = $derived(status === 'completed' ? 100 : 50);
 
 	const statusMessage = $derived(() => {
-		if (isCompressing) {
-			if (compressionProgress < 20) return 'Loading video compressor...';
-			if (compressionProgress < 80) return `Compressing to MP3... ${Math.round(compressionProgress)}%`;
-			return 'Finishing compression...';
-		}
 		if (status === 'uploading') return 'Uploading to Drive...';
 		if (status === 'transcribing') return 'Sending to AssemblyAI...';
 		if (status === 'completed') return 'Complete!';
@@ -58,13 +51,6 @@
 			>
 				<CheckCircle size={24} style="color: var(--success)" />
 			</div>
-		{:else if isCompressing}
-			<div
-				class="rounded-full p-2"
-				style="background: rgba(168, 85, 247, 0.1)"
-			>
-				<Zap size={24} class="animate-pulse" style="color: #a855f7" />
-			</div>
 		{:else}
 			<div
 				class="rounded-full p-2"
@@ -78,8 +64,6 @@
 			<h3 class="font-semibold">
 				{#if isCompleted}
 					Transcription Complete
-				{:else if isCompressing}
-					Compressing Video
 				{:else}
 					Transcription in Progress
 				{/if}
@@ -98,7 +82,6 @@
 			<div
 				class="progress-bar-fill"
 				class:success={isCompleted}
-				class:compression={isCompressing}
 				style="width: {progress}%"
 			></div>
 		</div>

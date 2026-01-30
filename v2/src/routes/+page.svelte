@@ -13,7 +13,6 @@
 		status: string;
 		fileName: string;
 		startTime: number;
-		compressionProgress: number;
 	} | null>(null);
 	let searchQuery = $state('');
 	let darkMode = $state(false);
@@ -109,19 +108,8 @@
 		activeTranscription = {
 			status: 'transcribing',
 			fileName,
-			startTime: Date.now(),
-			compressionProgress: 0
+			startTime: Date.now()
 		};
-	}
-
-	function handleCompressionProgress(event: CustomEvent<{ progress: number }>) {
-		if (activeTranscription) {
-			activeTranscription = {
-				...activeTranscription,
-				status: 'compressing',
-				compressionProgress: event.detail.progress
-			};
-		}
 	}
 
 	function handleMarkAllViewed() {
@@ -139,7 +127,6 @@
 			<DropZone
 				accessToken={data.accessToken}
 				on:transcriptionStart={handleTranscriptionStart}
-				on:compressionProgress={handleCompressionProgress}
 			/>
 		</section>
 
@@ -150,7 +137,6 @@
 					status={activeTranscription.status}
 					fileName={activeTranscription.fileName}
 					startTime={activeTranscription.startTime}
-					compressionProgress={activeTranscription.compressionProgress}
 				/>
 			</section>
 		{/if}
