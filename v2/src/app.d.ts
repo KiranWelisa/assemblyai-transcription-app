@@ -15,6 +15,7 @@ declare global {
 		}
 		interface PageData {
 			user: App.Locals['user'];
+			accessToken?: string;
 		}
 		interface Platform {
 			env: {
