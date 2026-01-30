@@ -50,6 +50,13 @@ export default function DropZone({
     return VIDEO_TYPES.includes(file.type) || VIDEO_EXTENSIONS.includes(extension);
   };
 
+  // Format file size for display
+  const formatFileSize = (bytes) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
   // Load FFmpeg on demand
   const loadFFmpeg = async () => {
     if (ffmpegRef.current) return ffmpegRef.current;
@@ -146,7 +153,7 @@ export default function DropZone({
     }
   };
 
-  const validateFile = (file) => {
+  const validateFile = (file, skipSizeCheck = false) => {
     if (!file) return { valid: false, error: 'No file selected' };
 
     const extension = '.' + file.name.split('.').pop().toLowerCase();
@@ -159,7 +166,9 @@ export default function DropZone({
       };
     }
 
-    if (file.size > MAX_FILE_SIZE) {
+    // Skip size check for video files (they will be compressed first)
+    // or when explicitly requested
+    if (!skipSizeCheck && !isVideoFile(file) && file.size > MAX_FILE_SIZE) {
       return {
         valid: false,
         error: `File too large. Maximum size: ${MAX_FILE_SIZE / 1024 / 1024}MB`
@@ -274,6 +283,7 @@ export default function DropZone({
   };
 
   const handleFile = async (file) => {
+    // Initial validation (skip size check for videos - they'll be compressed)
     const validation = validateFile(file);
     if (!validation.valid) {
       setUploadState({
@@ -289,13 +299,32 @@ export default function DropZone({
     try {
       let fileToUpload = file;
 
-      // Compress video files larger than threshold to MP3
-      if (isVideoFile(file) && file.size > COMPRESSION_THRESHOLD) {
+      // Compress video files to MP3
+      if (isVideoFile(file)) {
         try {
           fileToUpload = await compressToMp3(file);
+
+          // Check if compressed file is still too large
+          if (fileToUpload.size > MAX_FILE_SIZE) {
+            setUploadState({
+              status: 'error',
+              progress: 0,
+              fileName: file.name,
+              error: `Compressed file still too large (${formatFileSize(fileToUpload.size)}). Maximum: ${MAX_FILE_SIZE / 1024 / 1024}MB`,
+              compressionInfo: { originalSize: file.size, compressedSize: fileToUpload.size }
+            });
+            return;
+          }
         } catch (compressError) {
-          console.warn('Compression failed, uploading original:', compressError);
-          // Continue with original file if compression fails
+          console.error('Compression failed:', compressError);
+          setUploadState({
+            status: 'error',
+            progress: 0,
+            fileName: file.name,
+            error: `Compression failed: ${compressError.message}`,
+            compressionInfo: null
+          });
+          return;
         }
       }
 
@@ -375,12 +404,6 @@ export default function DropZone({
       error: null,
       compressionInfo: null
     });
-  };
-
-  const formatFileSize = (bytes) => {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   };
 
   const isCompressing = uploadState.status === 'compressing';
